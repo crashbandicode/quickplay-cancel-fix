@@ -82,6 +82,11 @@ POINTS = [
     {'target': 'main+0x15648d0', 'registers': ['x0'], 'rate_limit': 5,
      'captures': [{'expression': 'x0+0x188', 'type': 'u64'}, {'expression': 'x0+0x190', 'type': 'u64'},
                   {'expression': 'x0+0x198', 'type': 'bytes', 'size': 10}]},
+    # The Quickplay sequence's search start (state 5, first frame): x8 = the service, +0x74 its matchmaking mode
+    # before .16b4920 sets it (0 = a new Quickplay session, the QCF plugin's arming condition).
+    {'target': 'main+0x2369304', 'registers': ['x0', 'x8'], 'captures': [{'expression': 'x8+0x74', 'type': 'u32'}]},
+    # PracticeScene's leave state, first frame (Leave Battle confirmed): the QCF plugin's drop point.
+    {'target': 'main+0x1851930', 'registers': ['x19']},
     # The local member state setter (svc, state): what this console reports to the room (the host starts the round
     # once every member reports 7), with the caller.
     {'target': 'main+0x168db60', 'registers': ['x1', 'x30'], 'backtrace': True, 'rate_limit': 20},

@@ -210,7 +210,7 @@ def _last_waiting_entry_ns(ctx, inst):
     return last
 
 
-def ready_and_try_leave(ctx, tag='m', expect=None, cap_s=45, settle_s=20, host_wait_s=None):
+def ready_and_try_leave(ctx, tag='m', expect=None, cap_s=45, settle_s=20, host_wait_s=None, try_leave=True):
     """a readies; then, until a match session starts on a (detector) or `cap_s`: look every 0.5 s; when the game's
     waiting menu is open, Up to "Leave Battle", A, Yes; when it is not, Plus (opens it) at most once a second.
     Outcome `left` (a left the search before any session started, and none started within `settle_s`) or `matched`
@@ -244,6 +244,9 @@ def ready_and_try_leave(ctx, tag='m', expect=None, cap_s=45, settle_s=20, host_w
         if _match_in_trace(runner, on, traces[on]):
             out['events'].append({'t': round(time.monotonic() - began, 2), 'what': 'match-found (trace)'})
             break
+        if not try_leave:
+            time.sleep(0.5)   # the same match, without touching the waiting menu
+            continue
         shot = ctx.shot(f'{tag}-look-{i:03d}')
         i += 1
         t = round(time.monotonic() - began, 2)

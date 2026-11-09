@@ -25,6 +25,7 @@ KINDS = {
     'main+0x1685ac0': 'send_to', 'main+0x1566af4': 'host_round_start', 'main+0x15669c4': 'host_ready_check',
     'main+0x1564088': 'countdown_read', 'main+0x1563454': 'wait_pre_reset', 'main+0x1563650': 'countdown_reset',
     'main+0x15648d0': 'wait_enter', 'main+0x1566758': 'host_branch', 'main+0x168db60': 'local_state',
+    'main+0x2369304': 'search_start', 'main+0x1851930': 'leave_confirmed',
 }
 
 
@@ -74,6 +75,10 @@ def describe(kind, r):
         return f'practice net event type={cap(r, 0)} -> state 3'
     if kind == 'practice_leave':
         return f'practice leave state age={cap(r, 0)} mask={cap(r, 1)}'
+    if kind == 'search_start':
+        return f'search start (service mode before: {cap(r, 0)})'
+    if kind == 'leave_confirmed':
+        return 'Leave Battle confirmed (leave state, first frame)'
     if kind == 'local_state':
         return f'local member state -> {num(regs.get("x1"))} (lr={regs.get("x30")})'
     if kind == 'quit_request':
