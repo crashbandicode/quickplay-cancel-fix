@@ -1,0 +1,8 @@
+/target/
+/dist/
+# Game-derived frames and raw captures stay out of git; rows.json records their sha256.
+/eden/*/refs/
+*.capture.gif
+*.png
+!docs/media/*.png
+__pycache__/
