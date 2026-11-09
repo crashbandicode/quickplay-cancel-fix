@@ -1,16 +1,18 @@
-//! Switch half: the version and site checks, the one inline hook at the
-//! host's countdown test `.15669c4` (on another plugin's hook there if it
-//! finds one, see `chain`), and the install line. The hook runs on the game's
-//! main thread and allocates nothing; the diagnostic build formats an event
-//! into a static ring that a writer thread appends to `events.log`.
+//! Switch half: the version and site checks, the four inline hooks that drive
+//! `model::Gate` (on other plugins' hooks there if it finds them, see
+//! `chain`), the game's own member-state setter at the end of a hold, and the
+//! install line. The hooks run on the game's main thread and allocate
+//! nothing; the diagnostic build formats events into a static ring that a
+//! writer thread appends to `events.log`.
 
 use crate::chain::{self, hook::Outcome, Entry};
-use crate::model::{self, Kind, Line, Site};
+use crate::model::{self, Gate, Kind, Line, Note, Site, Tick};
+use core::cell::UnsafeCell;
 use core::fmt::Write as _;
 use skyline::hooks::{getRegionAddress, InlineCtx, Region};
 use skyline::nn;
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const DATA_DIR: &str = "sd:/ultimate/quickplay-cancel-fix";
 const OPEN_WRITE_APPEND: i32 = 2 | 4;
@@ -45,12 +47,37 @@ static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 static TEXT_BASE: AtomicU64 = AtomicU64::new(0);
 
+/// The first-match hold. Only the hooks touch it, all on the game's main
+/// thread; `BUSY` turns a re-entry (none is expected) into a no-op.
+struct Shared(UnsafeCell<Gate>);
+// SAFETY: accessed only inside `with_gate`, which `BUSY` makes exclusive.
+unsafe impl Sync for Shared {}
+static GATE: Shared = Shared(UnsafeCell::new(Gate::new()));
+static BUSY: AtomicBool = AtomicBool::new(false);
+
+fn with_gate<R>(f: impl FnOnce(&mut Gate) -> R) -> Option<R> {
+    if BUSY
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return None;
+    }
+    // SAFETY: `BUSY` is held.
+    let result = f(unsafe { &mut *GATE.0.get() });
+    BUSY.store(false, Ordering::Release);
+    Some(result)
+}
+
 fn tick() -> u64 {
     unsafe { nn::os::GetSystemTick() as u64 }
 }
 
 fn base() -> u64 {
     TEXT_BASE.load(Ordering::Relaxed)
+}
+
+unsafe fn read_u32(address: u64) -> u32 {
+    (address as *const u32).read_unaligned()
 }
 
 unsafe fn read_u64(address: u64) -> u64 {
@@ -70,38 +97,89 @@ unsafe fn game<F: Copy>(offset: usize) -> F {
     core::mem::transmute_copy(&code)
 }
 
-/// The countdown test `.15669c4` (see `model`): when the countdown has run
-/// out (w20 bit 0) and the room is full, clears the bit so the host takes the
-/// full-room wait, as for a member who arrived before the countdown ran out.
-unsafe extern "C" fn full_room_wait(ctx: &mut InlineCtx) {
-    let w20 = ctx.registers[20].w();
-    if w20 & 1 == 0 {
+/// The online service, as `.151b030..151b03c` loads it.
+unsafe fn service() -> Option<u64> {
+    ptr(base() + model::SERVICE as u64)
+        .and_then(|holder| ptr(holder + 8))
+        .and_then(|inner| ptr(inner + model::SERVICE_SLOT as u64))
+}
+
+#[cfg(feature = "diag")]
+fn note(note: Option<Note>, detail: u64) {
+    if let Some(note) = note {
+        diag::push(format_args!("diag {note:?} detail={detail:#x}"));
+    }
+}
+
+#[cfg(not(feature = "diag"))]
+fn note(_: Option<Note>, _: u64) {}
+
+/// The Quickplay sequence's search start (`model::SEARCH`): x8 = the service,
+/// before `.16b4920` sets its matchmaking mode.
+unsafe extern "C" fn search_start(ctx: &mut InlineCtx) {
+    let svc = ctx.registers[8].x();
+    if svc == 0 {
         return;
     }
-    // The argument `.15669dc..15669e4` passes to the same check.
-    let Some(slot) = ptr(base() + model::SERVICE as u64)
-        .and_then(|holder| ptr(holder + 8))
-        .map(|service| service + model::SERVICE_SLOT as u64)
-    else {
+    let mode = read_u32(svc + model::SVC_MODE as u64);
+    let result = with_gate(|gate| gate.search(mode)).flatten();
+    note(result, u64::from(mode));
+}
+
+/// The waiting area's ready report (`model::READY`): x0 = the service,
+/// w1 = the state.
+unsafe extern "C" fn ready_report(ctx: &mut InlineCtx) {
+    let state = ctx.registers[1].w();
+    if state != model::READY_STATE {
+        return;
+    }
+    let svc = ctx.registers[0].x();
+    if svc == 0 {
+        return;
+    }
+    let role = model::role(
+        read_u64(svc + model::SVC_MY_ID as u64),
+        read_u64(svc + model::SVC_HOST_ID as u64),
+    );
+    let online = model::online(read_u32(base() + model::MODE as u64));
+    if let Some((report, result)) = with_gate(|gate| gate.ready(state, role, online)) {
+        if report != state {
+            ctx.registers[1].set_w(report);
+        }
+        note(result, u64::from(report));
+    }
+}
+
+/// A frame of the wait loop on a console that isn't the room's host
+/// (`model::WAIT`): ends the hold after the full-room wait with the game's
+/// own setter.
+unsafe extern "C" fn wait_frame(_: &mut InlineCtx) {
+    let Some(svc) = service() else {
         return;
     };
-    let room_full: extern "C" fn(u64) -> u32 = game(model::ROOM_FULL_OFFSET);
-    let full = room_full(slot) & 1 != 0;
-    let kept = model::verdict(true, full);
-    if !kept {
-        ctx.registers[20].set_w(w20 & !1);
+    let round_started = read_u32(svc + model::SVC_ROUND_MASK as u64) != 0;
+    let Some((step, result)) = with_gate(|gate| gate.tick(round_started)) else {
+        return;
+    };
+    match step {
+        Tick::Release => {
+            let set_state: extern "C" fn(u64, u32) -> u32 = game(model::SET_STATE_OFFSET);
+            let reported = set_state(svc, model::READY_STATE) & 1;
+            note(result, u64::from(reported));
+        }
+        #[cfg(feature = "diag")]
+        Tick::Holding(frames) if frames % 60 == 0 => {
+            diag::push(format_args!("diag holding frames={frames}"));
+        }
+        _ => note(result, 0),
     }
-    #[cfg(feature = "diag")]
-    {
-        let waiting = ctx.registers[19].x();
-        let frames = (waiting as usize + model::FULL_ROOM_FRAMES) as *const u32;
-        diag::push(format_args!(
-            "diag countdown_out room_full={} verdict={} frames={}",
-            u8::from(full),
-            u8::from(kept),
-            frames.read_unaligned()
-        ));
-    }
+}
+
+/// PracticeScene's leave state on its first frame (`model::LEAVE`): Leave
+/// Battle was confirmed, so a hold ends.
+unsafe extern "C" fn leave_confirmed(_: &mut InlineCtx) {
+    let result = with_gate(|gate| gate.leave()).flatten();
+    note(result, 0);
 }
 
 type Path = Line<96>;
@@ -172,15 +250,14 @@ fn append_log(bytes: &[u8]) {
     }
 }
 
-/// Eden-only diagnostics: an event ring the hook formats into, and a writer
+/// Eden-only diagnostics: an event ring the hooks format into, and a writer
 /// thread that appends it to `events.log`.
 #[cfg(feature = "diag")]
 mod diag {
     use super::*;
-    use core::cell::UnsafeCell;
     use std::sync::atomic::fence;
 
-    const EVENT_RING: usize = 16;
+    const EVENT_RING: usize = 32;
     const EVENT_LEN: usize = 160;
     const WRITER_STACK: usize = 16 * 1024;
 
@@ -311,17 +388,26 @@ unsafe fn usable(site: &Site) -> bool {
     site_words(site).is_some_and(|(address, words)| site.usable(&words, address))
 }
 
-/// Another plugin's hook is on a site this plugin calls or relies on.
+/// Another plugin's hook is on a site this plugin calls.
 unsafe fn other_hook(site: &Site) -> bool {
     site.kind != Kind::Hooked && site_words(site).is_some_and(|(_, words)| words != site.stock())
 }
 
-/// Hooks `.15669c4`, on another plugin's hook there if it finds one.
-unsafe fn hook_verdict() -> (Entry, Outcome) {
-    match site_address(&model::VERDICT) {
-        Some(address) => chain::hook::inline(address, &model::VERDICT.stock(), full_room_wait),
-        None => (Entry::Foreign, Outcome::Skipped),
+/// Hooks `site`, on another plugin's hook there if it finds one. A near-only
+/// site that got a far jump is put back.
+unsafe fn hook(site: &Site, callback: unsafe extern "C" fn(&mut InlineCtx)) -> (Entry, Outcome) {
+    let Some((address, before)) = site_words(site) else {
+        return (Entry::Foreign, Outcome::Skipped);
+    };
+    if !site.usable(&before, address) {
+        return (Entry::Foreign, Outcome::Skipped);
     }
+    let (entry, outcome) = chain::hook::inline(address, &site.stock(), callback);
+    if site.near_only && outcome == Outcome::Far {
+        chain::hook::restore(address, &before);
+        return (entry, Outcome::Restored);
+    }
+    (entry, outcome)
 }
 
 fn version_is_supported() -> bool {
@@ -332,7 +418,7 @@ fn version_is_supported() -> bool {
 }
 
 /// Appends the install line to `events.log` and the Skyline log.
-fn report_install(report: &mut Line<256>) {
+fn report_install(report: &mut Line<320>) {
     let _ = write!(
         report,
         " heap_allocations={}",
@@ -350,7 +436,7 @@ fn report_install(report: &mut Line<256>) {
 
 #[skyline::main(name = "quickplay-cancel-fix")]
 pub fn main() {
-    let mut report = Line::<256>::new();
+    let mut report = Line::<320>::new();
     let _ = write!(
         report,
         "{} plugin=quickplay-cancel-fix/{}",
@@ -368,20 +454,32 @@ pub fn main() {
         unsafe { getRegionAddress(Region::Text) as u64 },
         Ordering::Relaxed,
     );
-    // The code the hook relies on and calls; other plugins' hooks there are
-    // fine (see `chain`).
-    let missing = model::SITES
-        .iter()
-        .find(|site| site.kind != Kind::Hooked && !unsafe { usable(site) });
-    let result = match missing {
+    let result = match model::SITES.iter().find(|site| !unsafe { usable(site) }) {
         Some(site) => {
             let _ = write!(report, " site={}", site.name);
             "not_installed"
         }
         None => {
-            let (entry, outcome) = unsafe { hook_verdict() };
-            let _ = write!(report, " verdict={}/{}", entry.name(), outcome.name());
-            if outcome.hooked() {
+            // The hold's release (wait), its drop (leave) and the arming
+            // (search) go in first; the ready report that starts a hold only
+            // if all three did.
+            let mut all = true;
+            let hooks: [(&Site, unsafe extern "C" fn(&mut InlineCtx)); 4] = [
+                (&model::WAIT, wait_frame),
+                (&model::LEAVE, leave_confirmed),
+                (&model::SEARCH, search_start),
+                (&model::READY, ready_report),
+            ];
+            for (site, callback) in hooks {
+                if !all {
+                    let _ = write!(report, " {}=not_tried", site.name);
+                    continue;
+                }
+                let (entry, outcome) = unsafe { hook(site, callback) };
+                let _ = write!(report, " {}={}/{}", site.name, entry.name(), outcome.name());
+                all = outcome.hooked();
+            }
+            if all {
                 "installed"
             } else {
                 "not_installed"

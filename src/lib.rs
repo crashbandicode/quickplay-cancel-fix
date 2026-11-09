@@ -1,8 +1,9 @@
-//! quickplay-cancel-fix: in Smash Ultimate 13.0.5 online rooms, a member who
-//! joins after the host's room countdown has run out gets the same short wait
-//! before the battle starts as one who joins earlier, so either player can
-//! still leave the waiting area (Leave Battle) before the match loads. The
-//! battle start itself stays the game's own.
+//! quickplay-cancel-fix: in Smash Ultimate 13.0.5 Quickplay, the first match
+//! after entering the character select can be left before it loads, as later
+//! matches can. When this console joins that first room, its waiting area
+//! reports ready after the same 180-frame wait an earlier arrival gets from
+//! the host, instead of at once; the battle start itself stays the game's own.
+//! Every later match is untouched.
 pub mod chain;
 pub mod model;
 #[cfg(target_os = "switch")]

@@ -1,7 +1,8 @@
 //! Chaining onto another plugin's hook that does not use inline-hook sharing
 //! v1, so both plugins keep working. Same rules as elite-rematch
-//! (`model::entry`, `runtime::hook_inline`). Copied unchanged otherwise from
-//! gsp-visualizer `a0dac0f` (also in ssbu-quiet-elite-switch).
+//! (`model::entry`, `runtime::hook_inline`). Copied from gsp-visualizer
+//! `a0dac0f` (also in ssbu-quiet-elite-switch); here `hook::restore` is public,
+//! for a site that takes only a one-word branch.
 //!
 //! Skyline writes a hook as a one-word `b`, or as a far jump `ldr x17, #8;
 //! br x17; .quad target` (16 bytes), with a `nop` first at an address 4 past
@@ -320,7 +321,7 @@ pub mod hook {
     }
 
     /// Puts back the words a hook at `address` replaced.
-    unsafe fn restore(address: u64, before: &[u32; WORDS]) {
+    pub unsafe fn restore(address: u64, before: &[u32; WORDS]) {
         let _ = skyline::patching::sky_memcpy(
             address as *const c_void,
             before.as_ptr().cast(),
@@ -338,7 +339,7 @@ pub mod hook {
         let before = words_at::<WORDS>(address);
         let entry = entry(stock, &before, address);
         let callback = callback as *const c_void;
-        let stub = ssbu_chain_stub as usize as u64;
+        let stub = ssbu_chain_stub as *const () as usize as u64;
         match entry {
             Entry::Foreign => return (entry, Outcome::Skipped),
             Entry::Chain(target) => {
