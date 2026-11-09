@@ -150,20 +150,27 @@ unsafe extern "C" fn ready_report(ctx: &mut InlineCtx) {
     }
 }
 
-/// A frame of the wait loop on a console that isn't the room's host
-/// (`model::WAIT`): ends the hold after the full-room wait with the game's
-/// own setter.
-unsafe extern "C" fn wait_frame(_: &mut InlineCtx) {
-    let Some(svc) = service() else {
-        return;
-    };
-    let round_started = read_u32(svc + model::SVC_ROUND_MASK as u64) != 0;
+/// A frame of the waiting area (`model::WAIT`, x19 = the PracticeScene
+/// context): counts it when the waiting menu could open (PracticeScene's own
+/// gate, `model::MENU_GATE`), and ends the hold after the full-room wait with
+/// the game's own setter.
+unsafe extern "C" fn wait_frame(ctx: &mut InlineCtx) {
     let holding = with_gate(|gate| gate.holding()).unwrap_or(false);
     if !holding {
         return;
     }
+    let Some(svc) = service() else {
+        return;
+    };
+    let round_started = read_u32(svc + model::SVC_ROUND_MASK as u64) != 0;
+    let context = ctx.registers[19].x();
     let input_free: extern "C" fn() -> u32 = game(model::INPUT_FREE_OFFSET);
-    let input_free = input_free() & 1 != 0;
+    let input_free = context != 0
+        && input_free() & 1 != 0
+        && model::practice_has_focus(
+            read_u64(context + model::PRACTICE_FOCUS as u64),
+            read_u64(base() + model::MENU_FOCUS as u64),
+        );
     let Some((step, result)) = with_gate(|gate| gate.tick(round_started, input_free)) else {
         return;
     };

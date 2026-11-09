@@ -20,6 +20,7 @@ REFS = HERE / 'refs'
 MAIN_REF = REFS / 'main.png'
 BANNER_ROI = [200, 110, 600, 240]       # READY TO FIGHT banner (ready-banner gate)
 TAB_BOX = [45, 4, 295, 58]              # the waiting menu's "Leave Battle" tab, 1280x674 frame
+MENU_BOX = [75, 125, 340, 158]          # the waiting menu's "Training Partners" header (Plus opens it there)
 DIALOG_ROI = [440, 285, 840, 325]       # a centered two-button dialog's text line (Rematch?, Leave?)
 SESSION = re.compile(r'session slot=\d+ kind=online')
 SYNC_END = re.compile(r'sync_end trigger=\w+[^\n]*')
@@ -185,7 +186,25 @@ def ready_and_wait_searching(ctx, tag='w', cap_s=90):
 # --- the row under test -----------------------------------------------------------------------------------------------
 
 def _tab_shown(ctx, shot):
-    return _diff(ctx, shot, REFS / 'leave-battle-tab.png', TAB_BOX) < 12
+    # The reference is the ROI itself (compared with b_is_roi; a full-frame compare pads it with black).
+    return ctx.runner.roi_diff(str(shot), str(REFS / 'leave-battle-tab.png'), list(TAB_BOX), True) < 12
+
+
+def _menu_shown(ctx, shot):
+    """Plus opened the waiting menu: its "Training Partners" header (focus on it). ROI-sized reference."""
+    return ctx.runner.roi_diff(str(shot), str(REFS / 'waiting-menu.png'), list(MENU_BOX), True) < 12
+
+
+def _left_in_trace(ctx, start):
+    """PracticeScene entered its leave state (4) since `start` in this instance's trace."""
+    path = ctx.runner.instances[ctx.on].get('trace_jsonl') or ''
+    return any((s['kind'] == 'practice_state' and s['x8'] == '0x4') or s['kind'] in ('practice_leave', 'quit_request')
+               for s in _states(_trace_records(path, start)))
+
+
+def _leave_from_menu(ctx, tag, trace_start, menu_shot):
+    """The waiting menu is open (menu_shot): the game's own Leave Battle (_explore_menu)."""
+    return _explore_menu(ctx, tag, trace_start, menu_shot)
 
 
 def _dialog_yes(ctx, tag):
@@ -250,21 +269,15 @@ def ready_and_try_leave(ctx, tag='m', expect=None, cap_s=45, settle_s=20, host_w
         shot = ctx.shot(f'{tag}-look-{i:03d}')
         i += 1
         t = round(time.monotonic() - began, 2)
-        if _tab_shown(ctx, shot):
+        if _menu_shown(ctx, shot) or _tab_shown(ctx, shot):
             out['events'].append({'t': t, 'what': 'menu', 'shot': str(shot)})
-            ctx.press('up', 120)
-            time.sleep(0.6)
-            tab = ctx.shot(f'{tag}-tab-focus')
-            ctx.press('a', 120)
-            time.sleep(1.2)
-            confirm = ctx.shot(f'{tag}-after-a')
-            out['events'].append({'t': round(time.monotonic() - began, 2), 'what': 'leave-a',
-                                  'tab': str(tab), 'after_a': str(confirm)})
-            if _tab_shown(ctx, confirm):
-                continue   # the A did not leave the menu: look again
-            out['events'].append({'what': 'yes', 'shots': _dialog_yes(ctx, tag)})
-            left_at = time.monotonic()
-            break
+            attempt = _leave_from_menu(ctx, tag, traces[on], shot)
+            out['events'].append(dict(attempt, t=round(time.monotonic() - began, 2), what='leave-attempt'))
+            if attempt['left']:
+                left_at = time.monotonic()
+                break
+            last_plus = time.monotonic()   # the menu was closed again with B
+            continue
         if time.monotonic() - last_plus >= 1.0:
             ctx.press('plus', 100)
             last_plus = time.monotonic()
@@ -308,6 +321,190 @@ def _match_in_trace(runner, key, start):
         if s['kind'] == 'child' and s['x8'] == '0x4':
             return True
     return False
+
+
+def leave_waiting(ctx, tag='lw', cap_s=45):
+    """This instance leaves its waiting area the game's way (Plus, the waiting menu, Leave Battle), so that its
+    next search starts a fresh room. Verified by PracticeScene's leave state in its trace; frames."""
+    path = _trace_path(ctx) or ''
+    start = _size(path)
+    began = time.monotonic()
+    attempts = []
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        shot = ctx.shot(f'{tag}-look')
+        if _menu_shown(ctx, shot) or _tab_shown(ctx, shot):
+            attempt = _leave_from_menu(ctx, tag, start, shot)
+            attempts.append(attempt)
+            if attempt['left']:
+                time.sleep(8.0)
+                return _save(ctx, f'{tag}-left-{ctx.on}', {'attempts': attempts,
+                                                           'seconds': round(time.monotonic() - began, 1)})
+        else:
+            ctx.press('plus', 100)
+        time.sleep(1.2)
+    raise RuntimeError(f'{ctx.on}: did not leave the waiting area in {cap_s} s: {attempts}')
+
+
+def _explore_menu(ctx, tag, start, menu_shot):
+    """The waiting menu is open. When its "Leave Battle" tab shows (the reference is the tab unfocused; the focus
+    starts on Training Partners, and Up focuses the tab, e1 20:46Z): Up, A, then Yes (Right+A, then Left+A),
+    verified by PracticeScene's leave state. Without the tab: Up x3, L, R, ZL, ZR with frames (where else could it
+    be). B closes the menu."""
+    steps = []
+    out = {'tab': _tab_shown(ctx, menu_shot), 'left': False, 'steps': steps}
+    if out['tab']:
+        ctx.press('up', 120)
+        time.sleep(0.6)
+        shot = ctx.shot(f'{tag}-x-tab-focus')
+        steps.append({'button': 'up', 'tab_unfocused': _tab_shown(ctx, shot), 'shot': str(shot)})
+        ctx.press('a', 120)
+        time.sleep(1.2)
+        out['after_a'] = str(ctx.shot(f'{tag}-x-after-a'))
+        for direction in ('right', 'left'):
+            if _left_in_trace(ctx, start):
+                break
+            ctx.press(direction, 120)
+            time.sleep(0.5)
+            ctx.press('a', 120)
+            time.sleep(1.5)
+            out.setdefault('confirm', []).append(str(ctx.shot(f'{tag}-x-confirm-{direction}')))
+        out['left'] = _left_in_trace(ctx, start)
+    else:
+        for button in ('up', 'up', 'up', 'l', 'r', 'zl', 'zr'):
+            ctx.press(button, 120)
+            time.sleep(0.6)
+            shot = ctx.shot(f'{tag}-x-{len(steps)}-{button}')
+            steps.append({'button': button, 'tab': _tab_shown(ctx, shot), 'shot': str(shot)})
+    if not out['left']:
+        for _ in range(3):
+            ctx.press('b', 120)
+            time.sleep(0.4)
+        out['closed'] = str(ctx.shot(f'{tag}-x-closed'))
+    return out
+
+
+def explore_waiting(ctx, tag='ex', cap_s=60, ready=False):
+    """Exploration (never fails on the game's answer): optionally Ready first; then Plus until the waiting menu
+    opens, and `_explore_menu` (where is Leave Battle, and does it leave). Stops when a match is found (trace) or
+    it left. Saves `{tag}-try-leave.json` (outcome left / matched / none) so `after_soft` can follow."""
+    runner, on = ctx.runner, ctx.on
+    path = _trace_path(ctx) or ''
+    start = _size(path)
+    out = {'tag': tag, 'events': []}
+    if ready:
+        out['ready'] = _ready(ctx, tag)
+    began = time.monotonic()
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        t = round(time.monotonic() - began, 2)
+        if _match_in_trace(runner, on, start):
+            out['events'].append({'t': t, 'what': 'match-found (trace)'})
+            break
+        shot = ctx.shot(f'{tag}-look')
+        if _menu_shown(ctx, shot) or _tab_shown(ctx, shot):
+            out['events'].append({'t': t, 'what': 'menu', 'shot': str(shot), 'tab': _tab_shown(ctx, shot)})
+            got = _explore_menu(ctx, tag, start, shot)
+            out['events'].append(dict(got, t=round(time.monotonic() - began, 2), what='explore'))
+            if got['left']:
+                break
+            continue
+        ctx.press('plus', 100)
+        out['events'].append({'t': t, 'what': 'plus'})
+        time.sleep(1.0)
+    time.sleep(3.0)
+    out['states'] = [s for s in _states(_trace_records(path, start))
+                     if s['kind'] in ('child', 'parent', 'practice_state', 'practice_result', 'local_state',
+                                      'leave_confirmed', 'quit_request', 'practice_leave')]
+    out['outcome'] = ('left' if _left_in_trace(ctx, start) else
+                      'matched' if _match_in_trace(runner, on, start) else 'none')
+    out['frames'] = {k: str(runner.shot(k, f'{tag}-end')) for k in ('a', 'b')}
+    _save(ctx, f'{tag}-try-leave', out)
+    return {'outcome': out['outcome'], 'events': len(out['events'])}
+
+
+def _match_marks(runner, starts):
+    """Per instance since `starts`: (session and sync_end lines seen, a session is open: the last session line comes
+    after the last sync_end)."""
+    out = {}
+    for k, start in starts.items():
+        text = _tail(runner.instances[k]['detector_log'], start)
+        sessions = [m.start() for m in SESSION.finditer(text)]
+        ends = [m.start() for m in SYNC_END.finditer(text)]
+        out[k] = (len(sessions) + len(ends), bool(sessions) and (not ends or sessions[-1] > ends[-1]))
+    return out
+
+
+def after_soft(ctx, tag='m', settle_s=60.0, cap_s=240.0):
+    """after_try that records instead of failing: a match that errors is waited out (both back at the character
+    select) and noted. A sudden death after a time-out (a second detector session) is waited out too, then the
+    Rematch? countdown."""
+    runner = ctx.runner
+    starts = {k: _size(runner.instances[k]['detector_log']) for k in ('a', 'b')}
+    out = {}
+    try:
+        out['after'] = after_try(ctx, tag)
+    except RuntimeError as e:
+        out['error'] = str(e)
+        time.sleep(settle_s)
+    began = time.monotonic()
+    marks, quiet_since, extra = None, time.monotonic(), False
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        now = _match_marks(runner, starts)
+        if now != marks:
+            marks, quiet_since = now, time.monotonic()
+        if any(open_ for _, open_ in now.values()):
+            extra = True
+        elif time.monotonic() - quiet_since >= 20.0:
+            break
+        time.sleep(3.0)
+    if extra:
+        time.sleep(35.0)   # results, then the Rematch? countdown
+    out['marks'] = marks
+    out['waited_extra_s'] = round(time.monotonic() - began, 1)
+    out['frames'] = {k: str(runner.shot(k, f'{tag}-soft')) for k in ('a', 'b')}
+    return _save(ctx, f'{tag}-after-soft', out)
+
+
+def ready_only(ctx, tag='r'):
+    """READY TO FIGHT -> Plus (the search starts); returns at once."""
+    return _ready(ctx, tag)
+
+
+def leave_after_peer_joins(ctx, tag='hl', delay_s=4.0, join_cap_s=60, cap_s=60):
+    """This instance waits alone in its room; once the peer's trace shows it entering the match flow
+    (IngameCallSequenceScene, i.e. it joined this room and is loading), wait `delay_s`, then the waiting menu and the
+    game's own Leave Battle (`explore_waiting`). The native leave of the console that was waiting, while the other
+    one loads."""
+    peer = 'a' if ctx.on == 'b' else 'b'
+    ppath = _trace_path(ctx, peer) or ''
+    pstart = _size(ppath)
+    began = time.monotonic()
+    joined = None
+    while time.monotonic() - began < join_cap_s:
+        ctx.check_stop()
+        if any(s['kind'] == 'parent' and s['x8'] == '0x8' for s in _states(_trace_records(ppath, pstart))):
+            joined = round(time.monotonic() - began, 1)
+            break
+        time.sleep(0.5)
+    _save(ctx, f'{tag}-peer-joined', {'peer': peer, 'joined_after_s': joined,
+                                      'frames': {k: str(ctx.runner.shot(k, f'{tag}-joined')) for k in ('a', 'b')}})
+    if joined is None:
+        raise RuntimeError(f'{peer} did not join within {join_cap_s} s')
+    time.sleep(delay_s)
+    return explore_waiting(ctx, tag=tag, cap_s=cap_s)
+
+
+def settle(ctx, wait_s=20.0):
+    """Wait, then a frame of both (where each is before the next row's steps)."""
+    time.sleep(wait_s)
+    return {k: str(ctx.runner.shot(k, 'settle')) for k in ('a', 'b')}
+
+
+def noop(ctx, why=''):
+    """A row kept for the chain after a same-boot fix."""
+    return {'why': why}
 
 
 def tap(ctx, button='a', wait_s=3.0):

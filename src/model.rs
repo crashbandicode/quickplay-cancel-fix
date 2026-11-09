@@ -114,24 +114,52 @@ pub const READY: Site = Site {
 // boundary), over `.151b04c`.
 const _: () = assert!(READY.near_only && READY_OFFSET % 8 == 4);
 
-/// The waiting battle's wait loop (`.1564a30`), the branch a console that is
-/// not the room's host takes every frame: it reads the round's ack mask and
-/// waits while it is 0. x19 = the waiting battle. Nothing jumps into the 16
-/// bytes from here; no flags are live.
-pub const WAIT_OFFSET: usize = 0x1564d78;
+/// PracticeScene's running state (`.1851660`, every waiting-area frame), after
+/// its update call: `ldrb w8, [x19, #0xf0]` (its exit request), x19 = the
+/// PracticeScene context. Nothing jumps into the 20 bytes from here; no flags
+/// are live.
+pub const WAIT_OFFSET: usize = 0x1851674;
 pub const WAIT: Site = Site {
     name: "wait",
     offset: WAIT_OFFSET,
     kind: Kind::Hooked,
     near_only: false,
     guard: [
-        0x88, 0x2f, 0x46, 0xf9, 0x08, 0x05, 0x40, 0xf9, 0x08, 0x45, 0x40, 0xf9, 0x89, 0x46, 0x8d,
-        0x52, 0x49, 0x00, 0xa0, 0x72, 0x08, 0x69, 0x69, 0xb8, 0xe8, 0x1d, 0x00, 0x34, 0x08, 0x00,
-        0x00, 0xb0, 0x08, 0x01, 0x2c, 0x91, 0x5f, 0xff, 0xff, 0x17, 0x68, 0xdf, 0x43, 0xf9, 0x88,
-        0x00, 0x00, 0xb4, 0x08, 0x05, 0x40, 0xf9, 0x08, 0x99, 0x40, 0xb9, 0xe8, 0xfa, 0xff, 0x35,
-        0x48, 0xee, 0x01, 0xf0,
+        0x68, 0xc2, 0x43, 0x39, 0x28, 0x01, 0x00, 0x34, 0x68, 0xfe, 0x81, 0xb9, 0x1f, 0x4d, 0x00,
+        0x71, 0x22, 0x01, 0x00, 0x54, 0x68, 0x0a, 0x08, 0x8b, 0xe9, 0x03, 0x1f, 0x32, 0x09, 0xb1,
+        0x01, 0xb9, 0x68, 0xf6, 0x40, 0xb9, 0x68, 0x12, 0x02, 0xb9, 0xfd, 0x7b, 0x41, 0xa9, 0xf3,
+        0x07, 0x42, 0xf8, 0xc0, 0x03, 0x5f, 0xd6, 0xea, 0xc3, 0x85, 0x94, 0x00, 0x00, 0x00, 0x00,
+        0xe8, 0xd6, 0x01, 0xd0,
     ],
 };
+
+/// PracticeScene's menu gate `(scene) -> bool` (`.18512c0`): `.17f3810()` and
+/// the context's `+0x128` equal to the global at `MENU_FOCUS`. The hold counts
+/// a frame only when this holds; the plugin evaluates it from the context (it
+/// has no scene pointer), so its 64 bytes are checked as code it relies on.
+pub const MENU_GATE_OFFSET: usize = 0x18512c0;
+pub const MENU_GATE: Site = Site {
+    name: "menu_gate",
+    offset: MENU_GATE_OFFSET,
+    kind: Kind::Called,
+    near_only: false,
+    guard: [
+        0xf3, 0x0f, 0x1e, 0xf8, 0xfd, 0x7b, 0x01, 0xa9, 0xfd, 0x43, 0x00, 0x91, 0xf3, 0x03, 0x00,
+        0xaa, 0x50, 0x89, 0xfe, 0x97, 0x00, 0x01, 0x00, 0x36, 0x68, 0x2e, 0x40, 0xf9, 0x89, 0xd3,
+        0x01, 0xd0, 0x29, 0xc5, 0x43, 0xf9, 0x08, 0x95, 0x40, 0xf9, 0x1f, 0x01, 0x09, 0xeb, 0xe0,
+        0x17, 0x9f, 0x1a, 0x02, 0x00, 0x00, 0x14, 0xe0, 0x03, 0x1f, 0x2a, 0xfd, 0x7b, 0x41, 0xa9,
+        0xf3, 0x07, 0x42, 0xf8,
+    ],
+};
+/// The global the menu gate compares with the context's `+0x128`.
+pub const MENU_FOCUS: usize = 0x52c3788;
+pub const PRACTICE_FOCUS: usize = 0x128;
+
+/// The menu gate's second half: the PracticeScene context's focus handle is
+/// the current one.
+pub fn practice_has_focus(context_focus: u64, current: u64) -> bool {
+    context_focus != 0 && context_focus == current
+}
 
 /// PracticeScene's leave state (`.18518b0`, Leave Battle confirmed) on its
 /// first frame, where it reads the round's ack mask to leave (0) or go back to
@@ -171,10 +199,10 @@ pub const SET_STATE: Site = Site {
 
 /// `() -> bool`: no screen fade, pop-up or dialog is up (the first half of
 /// PracticeScene's menu gate `.18512c0`). The joiner's ready report comes while
-/// the waiting area is still fading in behind the loading tip; the hold counts
-/// only frames where this holds, so the 180 frames are ones in which the
-/// waiting menu can open. Called, never hooked (TrainingRooms also relies on
-/// it).
+/// its waiting area is still loading behind the loading tip; the hold counts
+/// only frames where the whole gate holds, so the 180 frames are ones in which
+/// the waiting menu can open. Called, never hooked (TrainingRooms also relies
+/// on it).
 pub const INPUT_FREE_OFFSET: usize = 0x17f3810;
 pub const INPUT_FREE: Site = Site {
     name: "input_free",
@@ -191,7 +219,7 @@ pub const INPUT_FREE: Site = Site {
 };
 
 /// Every site checked before anything is installed.
-pub const SITES: [&Site; 6] = [&SEARCH, &READY, &WAIT, &LEAVE, &SET_STATE, &INPUT_FREE];
+pub const SITES: [&Site; 7] = [&SEARCH, &READY, &WAIT, &LEAVE, &SET_STATE, &INPUT_FREE, &MENU_GATE];
 
 /// The main-image offsets this plugin hooks.
 pub const HOOKED_SITES: [usize; 4] = [SEARCH_OFFSET, READY_OFFSET, WAIT_OFFSET, LEAVE_OFFSET];
@@ -487,14 +515,19 @@ mod tests {
         // bl .168db60; tbnz w0, #0
         assert_eq!(bl_target(&READY, 0), SET_STATE_OFFSET);
         assert_eq!(READY.stock()[1], 0x3700_0200);
-        // ldr x8, [x28, #0xc58]; ...; mov w9, #0x6a34; movk w9, #2, lsl #16 (the ack mask)
-        assert_eq!(WAIT.stock()[0], 0xf946_2f88);
-        assert_eq!(WAIT.stock()[3], 0x528d_4689);
-        assert_eq!(WAIT.stock()[4], 0x72a0_0049);
-        assert_eq!(0x2_0000 | ((WAIT.stock()[3] >> 5) & 0xffff) as usize, SVC_ROUND_MASK);
-        // adrp x8, 0x52c4000; ldr x8, [x8, #0xc58]; ...; the same mask read, then cbz
+        // ldrb w8, [x19, #0xf0]; cbz w8
+        assert_eq!(WAIT.stock()[0], 0x3943_c268);
+        // adrp x8, 0x52c4000; ldr x8, [x8, #0xc58]; ...; mov w9, #0x6a34; movk w9, #2, lsl #16 (the ack mask)
         assert_eq!(LEAVE.stock()[1], 0xf946_2d08);
-        assert_eq!(LEAVE.stock()[4..6], WAIT.stock()[3..5]);
+        assert_eq!(LEAVE.stock()[4..6], [0x528d_4689, 0x72a0_0049]);
+        assert_eq!(0x2_0000 | ((LEAVE.stock()[4] >> 5) & 0xffff) as usize, SVC_ROUND_MASK);
+        // bl .17f3810; ...; ldr x8, [x19, #0x58]; adrp x9; ldr x9, [x9, #0x788]; ldr x8, [x8, #0x128]
+        assert_eq!(bl_target(&MENU_GATE, 4), INPUT_FREE_OFFSET);
+        assert_eq!(MENU_GATE.stock()[6], 0xf940_2e68);
+        assert_eq!(MENU_GATE.stock()[8], 0xf943_c529);
+        assert_eq!(MENU_GATE.stock()[9], 0xf940_9508);
+        assert_eq!((MENU_GATE.stock()[8] >> 10 & 0xfff) as usize * 8, MENU_FOCUS & 0xfff);
+        assert_eq!((MENU_GATE.stock()[9] >> 10 & 0xfff) as usize * 8, PRACTICE_FOCUS);
         // stp x28, x27, [sp, #-0x60]!
         assert_eq!(SET_STATE.stock()[0], 0xa9ba_6ffc);
         // str x19, [sp, #-0x20]!
@@ -514,12 +547,16 @@ mod tests {
         for site in SITES {
             assert!(site.usable(&site.stock(), at(site)), "{}", site.name);
         }
-        // TrainingRooms fingerprints .236b470+0x104 and .1851480+0x100: no site in them.
+        // TrainingRooms fingerprints .236b470+0x104, .1851480+0x100, .18512c0+0x50 and .1851310+0x30: no hook
+        // in them (the menu gate is only read).
         for (start, len) in [(0x236b470, 0x104), (0x1851480, 0x100), (0x18512c0, 0x50), (0x1851310, 0x30)] {
-            for site in SITES {
+            for site in SITES.iter().filter(|s| s.kind == Kind::Hooked) {
                 assert!(site.offset + 64 <= start || site.offset >= start + len, "{}", site.name);
             }
         }
+        assert!(practice_has_focus(0x1234, 0x1234));
+        assert!(!practice_has_focus(0x1234, 0x5678));
+        assert!(!practice_has_focus(0, 0));
     }
 
     #[test]
