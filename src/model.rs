@@ -15,9 +15,10 @@
 //! For the first match of a Quickplay session (the character select's Ready
 //! that starts the service's matchmaking mode), and only when this console
 //! joins the room, the plugin reports 6 at `.151b044` instead and the game's
-//! own `.168db60(svc, 7)` 180 waiting-area frames later: the same wait an
-//! earlier arrival gets. The host sees a joiner that is still loading. Leaving
-//! the waiting area drops the hold. Every later match is untouched.
+//! own `.168db60(svc, 7)` after 180 frames in which the waiting menu can open:
+//! the full-room wait the host gives an earlier arrival. The host sees a
+//! joiner that is still loading. Leaving the waiting area drops the hold.
+//! Every later match is untouched.
 
 use crate::chain;
 
@@ -168,8 +169,29 @@ pub const SET_STATE: Site = Site {
     ],
 };
 
+/// `() -> bool`: no screen fade, pop-up or dialog is up (the first half of
+/// PracticeScene's menu gate `.18512c0`). The joiner's ready report comes while
+/// the waiting area is still fading in behind the loading tip; the hold counts
+/// only frames where this holds, so the 180 frames are ones in which the
+/// waiting menu can open. Called, never hooked (TrainingRooms also relies on
+/// it).
+pub const INPUT_FREE_OFFSET: usize = 0x17f3810;
+pub const INPUT_FREE: Site = Site {
+    name: "input_free",
+    offset: INPUT_FREE_OFFSET,
+    kind: Kind::Called,
+    near_only: false,
+    guard: [
+        0xf3, 0x0f, 0x1e, 0xf8, 0xfd, 0x7b, 0x01, 0xa9, 0xfd, 0x43, 0x00, 0x91, 0xe8, 0xd9, 0x01,
+        0x90, 0x08, 0x11, 0x44, 0xf9, 0xa8, 0x00, 0x00, 0xb4, 0x08, 0x05, 0x40, 0xf9, 0x08, 0x89,
+        0x40, 0xf9, 0x00, 0x41, 0x40, 0xf9, 0x7f, 0xf1, 0x1b, 0x94, 0xe8, 0xd9, 0x01, 0x90, 0x08,
+        0x15, 0x44, 0xf9, 0xa8, 0x01, 0x00, 0xb4, 0x13, 0x05, 0x40, 0xf9, 0x68, 0x8a, 0x40, 0xf9,
+        0x00, 0x41, 0x40, 0xf9,
+    ],
+};
+
 /// Every site checked before anything is installed.
-pub const SITES: [&Site; 5] = [&SEARCH, &READY, &WAIT, &LEAVE, &SET_STATE];
+pub const SITES: [&Site; 6] = [&SEARCH, &READY, &WAIT, &LEAVE, &SET_STATE, &INPUT_FREE];
 
 /// The main-image offsets this plugin hooks.
 pub const HOOKED_SITES: [usize; 4] = [SEARCH_OFFSET, READY_OFFSET, WAIT_OFFSET, LEAVE_OFFSET];
@@ -229,6 +251,8 @@ pub enum Tick {
     Idle,
     /// Holding; frames counted so far.
     Holding(u32),
+    /// Holding, but this frame doesn't count (the waiting menu couldn't open).
+    Paused(u32),
     /// The hold ends: report 7 now.
     Release,
 }
@@ -307,14 +331,18 @@ impl Gate {
     }
 
     /// A frame of the wait loop as the joiner; `round_started` = the ack mask
-    /// is set.
-    pub fn tick(&mut self, round_started: bool) -> (Tick, Option<Note>) {
+    /// is set; `input_free` = the waiting menu could open this frame (no fade,
+    /// pop-up or dialog). Only such frames count.
+    pub fn tick(&mut self, round_started: bool, input_free: bool) -> (Tick, Option<Note>) {
         let Some(held) = self.held else {
             return (Tick::Idle, None);
         };
         if round_started {
             self.held = None;
             return (Tick::Idle, Some(Note::DroppedRound));
+        }
+        if !input_free {
+            return (Tick::Paused(held), None);
         }
         let held = held + 1;
         if held >= FULL_ROOM_WAIT {
@@ -469,6 +497,8 @@ mod tests {
         assert_eq!(LEAVE.stock()[4..6], WAIT.stock()[3..5]);
         // stp x28, x27, [sp, #-0x60]!
         assert_eq!(SET_STATE.stock()[0], 0xa9ba_6ffc);
+        // str x19, [sp, #-0x20]!
+        assert_eq!(INPUT_FREE.stock()[0], 0xf81e_0ff3);
     }
 
     /// Where each site would be with the image at a page-aligned base.
@@ -574,11 +604,36 @@ mod tests {
         new_session(&mut gate);
         gate.ready(READY_STATE, Role::Joiner, true);
         for frame in 1..FULL_ROOM_WAIT {
-            assert_eq!(gate.tick(false), (Tick::Holding(frame), None));
+            assert_eq!(gate.tick(false, true), (Tick::Holding(frame), None));
         }
-        assert_eq!(gate.tick(false), (Tick::Release, Some(Note::Released)));
-        assert_eq!(gate.tick(false), (Tick::Idle, None));
+        assert_eq!(gate.tick(false, true), (Tick::Release, Some(Note::Released)));
+        assert_eq!(gate.tick(false, true), (Tick::Idle, None));
         assert!(!gate.holding());
+    }
+
+    #[test]
+    fn only_frames_with_the_menu_available_count() {
+        let mut gate = Gate::new();
+        new_session(&mut gate);
+        gate.ready(READY_STATE, Role::Joiner, true);
+        // The waiting area fading in behind the loading tip: nothing counts.
+        for _ in 0..1000 {
+            assert_eq!(gate.tick(false, false), (Tick::Paused(0), None));
+        }
+        for frame in 1..=100 {
+            assert_eq!(gate.tick(false, true), (Tick::Holding(frame), None));
+        }
+        // The waiting menu open (a dialog is up): paused, then the rest counts.
+        assert_eq!(gate.tick(false, false), (Tick::Paused(100), None));
+        for frame in 101..FULL_ROOM_WAIT {
+            assert_eq!(gate.tick(false, true), (Tick::Holding(frame), None));
+        }
+        assert_eq!(gate.tick(false, true), (Tick::Release, Some(Note::Released)));
+        // A round started while paused still drops it.
+        let mut gate = Gate::new();
+        new_session(&mut gate);
+        gate.ready(READY_STATE, Role::Joiner, true);
+        assert_eq!(gate.tick(true, false), (Tick::Idle, Some(Note::DroppedRound)));
     }
 
     #[test]
@@ -586,14 +641,14 @@ mod tests {
         let mut gate = Gate::new();
         new_session(&mut gate);
         gate.ready(READY_STATE, Role::Joiner, true);
-        gate.tick(false);
+        gate.tick(false, true);
         assert_eq!(gate.leave(), Some(Note::DroppedLeave));
-        assert_eq!(gate.tick(false), (Tick::Idle, None));
+        assert_eq!(gate.tick(false, true), (Tick::Idle, None));
         // A round started anyway.
         let mut gate = Gate::new();
         new_session(&mut gate);
         gate.ready(READY_STATE, Role::Joiner, true);
-        assert_eq!(gate.tick(true), (Tick::Idle, Some(Note::DroppedRound)));
+        assert_eq!(gate.tick(true, true), (Tick::Idle, Some(Note::DroppedRound)));
         // The waiting area ended some other way: the next ready report ends the stale hold.
         let mut gate = Gate::new();
         new_session(&mut gate);
@@ -612,12 +667,12 @@ mod tests {
         let mut gate = Gate::new();
         new_session(&mut gate);
         gate.ready(READY_STATE, Role::Joiner, true);
-        while gate.tick(false).0 != Tick::Release {}
+        while gate.tick(false, true).0 != Tick::Release {}
         // Every later ready report in the session, whatever the role.
         for role in [Role::Joiner, Role::Host, Role::Joiner] {
             assert_eq!(gate.search(2), None);
             assert_eq!(gate.ready(READY_STATE, role, true), (READY_STATE, None));
-            assert_eq!(gate.tick(false), (Tick::Idle, None));
+            assert_eq!(gate.tick(false, true), (Tick::Idle, None));
         }
     }
 

@@ -158,7 +158,13 @@ unsafe extern "C" fn wait_frame(_: &mut InlineCtx) {
         return;
     };
     let round_started = read_u32(svc + model::SVC_ROUND_MASK as u64) != 0;
-    let Some((step, result)) = with_gate(|gate| gate.tick(round_started)) else {
+    let holding = with_gate(|gate| gate.holding()).unwrap_or(false);
+    if !holding {
+        return;
+    }
+    let input_free: extern "C" fn() -> u32 = game(model::INPUT_FREE_OFFSET);
+    let input_free = input_free() & 1 != 0;
+    let Some((step, result)) = with_gate(|gate| gate.tick(round_started, input_free)) else {
         return;
     };
     match step {
