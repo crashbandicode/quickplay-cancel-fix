@@ -241,6 +241,9 @@ def ready_and_try_leave(ctx, tag='m', expect=None, cap_s=45, settle_s=20, host_w
         if SESSION.search(_tail(det, det_start)):
             out['events'].append({'t': round(time.monotonic() - began, 2), 'what': 'session'})
             break
+        if _match_in_trace(runner, on, traces[on]):
+            out['events'].append({'t': round(time.monotonic() - began, 2), 'what': 'match-found (trace)'})
+            break
         shot = ctx.shot(f'{tag}-look-{i:03d}')
         i += 1
         t = round(time.monotonic() - began, 2)
@@ -269,6 +272,13 @@ def ready_and_try_leave(ctx, tag='m', expect=None, cap_s=45, settle_s=20, host_w
         while time.monotonic() < end and not SESSION.search(_tail(det, det_start)):
             ctx.check_stop()
             time.sleep(1.0)
+    if left_at is None and _match_in_trace(runner, on, traces[on]):
+        # The match was found and is loading (slow hosts): wait for the battle's session line.
+        end = time.monotonic() + 120
+        while time.monotonic() < end and not SESSION.search(_tail(det, det_start)):
+            ctx.check_stop()
+            time.sleep(1.0)
+        out['match_in_trace'] = True
     session = SESSION.search(_tail(det, det_start))
     out['outcome'] = 'matched' if session else ('left' if left_at is not None else 'none')
     out['frames_taken'] = i
@@ -284,6 +294,29 @@ def ready_and_try_leave(ctx, tag='m', expect=None, cap_s=45, settle_s=20, host_w
     if expect and out['outcome'] != expect:
         raise RuntimeError(f'{tag}: outcome {out["outcome"]}, expected {expect}')
     return {'outcome': out['outcome'], 'events': len(out['events'])}
+
+
+def _match_in_trace(runner, key, start):
+    """The instance's trace since `start` shows a found match: PracticeScene result 3 or MeleeScene requested."""
+    path = runner.instances[key].get('trace_jsonl') or ''
+    for s in _states(_trace_records(path, start)):
+        if s['kind'] == 'practice_result' and s['x8'] == '0x3':
+            return True
+        if s['kind'] == 'child' and s['x8'] == '0x4':
+            return True
+    return False
+
+
+def tap(ctx, button='a', wait_s=3.0):
+    """One button tap, then a fixed wait (the next step is a gate)."""
+    ctx.press(button, 120)
+    time.sleep(wait_s)
+    return {'tap': button}
+
+
+def ready_now(ctx, tag='r'):
+    """Ready at once (Plus on the READY TO FIGHT banner), without waiting for the search to show."""
+    return _save(ctx, f'{tag}-ready-{ctx.on}', {'ready': _ready(ctx, tag)})
 
 
 def ensure_searching(ctx, tag='w'):

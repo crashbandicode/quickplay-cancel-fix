@@ -82,6 +82,9 @@ POINTS = [
     {'target': 'main+0x15648d0', 'registers': ['x0'], 'rate_limit': 5,
      'captures': [{'expression': 'x0+0x188', 'type': 'u64'}, {'expression': 'x0+0x190', 'type': 'u64'},
                   {'expression': 'x0+0x198', 'type': 'bytes', 'size': 10}]},
+    # The local member state setter (svc, state): what this console reports to the room (the host starts the round
+    # once every member reports 7), with the caller.
+    {'target': 'main+0x168db60', 'registers': ['x1', 'x30'], 'backtrace': True, 'rate_limit': 20},
     # 0x1566650's host branch (this station is the session host): sampled to tell host from joiner.
     {'target': 'main+0x1566758', 'rate_limit': 1, 'captures': [{'expression': 'x19+0x180', 'type': 'u32'}]},
 ]
@@ -108,23 +111,34 @@ def main():
     p.add_argument('--nro', action='append', default=[], help='a=<path> or b=<path>: the QCF NRO for that instance')
     p.add_argument('--displays', default='124,125')
     p.add_argument('--res', type=int, help='core.resolution_setup for both instances (XPS default is 1 = 0.5x)')
+    p.add_argument('--inputs', default=str(INPUTS), help='folder with the detector and tile cursor NROs')
+    p.add_argument('--overlay', action='append', default=[],
+                   help='<file>@<profile-relative path>: copied into both instances\' profiles (pinned)')
+    p.add_argument('--host-base', help='JSON with top-level keys to override (host, hostname, runner, ...)')
     p.add_argument('--authorization', required=True)
     args = p.parse_args()
     src = json.loads(Path(args.source).read_text())
     nros = dict(item.split('=', 1) for item in args.nro)
     displays = args.displays.split(',')
-    detector = INPUTS / 'libssbu_desync_detector.nro'
-    tile = INPUTS / 'libssbu_tile_cursor.nro'
+    detector = Path(args.inputs) / 'libssbu_desync_detector.nro'
+    tile = Path(args.inputs) / 'libssbu_tile_cursor.nro'
+    overlays = [dict(pin(item.split('@', 1)[0]), to=item.split('@', 1)[1]) for item in args.overlay]
     cfg = {k: v for k, v in src.items() if k not in ('final', 'rows', 'instances')}
+    instance_base = {}
+    if args.host_base:
+        base = json.loads(Path(args.host_base).read_text())
+        instance_base = base.pop('instance', {})
+        cfg.update(base)
     cfg.update(owner=OWNER, label=args.label, authorization=args.authorization, runtime=5400,
                work_root=f'/home/intpa/eden-runs/{args.label}/work', state_dir=f'/home/intpa/eden-runs/{args.label}/state')
     cfg['instances'] = []
     for i, item in enumerate(src['instances'][:2]):
         key = item['key']
         inst = {k: v for k, v in item.items() if k not in ('plugins', 'files', 'trace', 'sources')}
+        inst.update(instance_base)
         inst['display'] = ':' + displays[i]
         inst['plugins'] = [pin(detector), pin(tile)] + ([pin(nros[key])] if key in nros else [])
-        inst['files'] = []
+        inst['files'] = [dict(o) for o in overlays]
         inst['sources'] = {'detector_log': 'user/sdmc/ultimate/ssbu-desync-detector/events.log',
                            'tile_log': 'user/sdmc/ultimate/ssbu-tile-cursor/events.log',
                            'qcf_log': 'user/sdmc/ultimate/quickplay-cancel-fix/events.log'}

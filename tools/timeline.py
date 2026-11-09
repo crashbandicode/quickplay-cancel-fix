@@ -24,7 +24,7 @@ KINDS = {
     'main+0x169eadc': 'mask_store_9eadc', 'main+0x1892048': 'mask_store_92048', 'main+0x1685cb0': 'send',
     'main+0x1685ac0': 'send_to', 'main+0x1566af4': 'host_round_start', 'main+0x15669c4': 'host_ready_check',
     'main+0x1564088': 'countdown_read', 'main+0x1563454': 'wait_pre_reset', 'main+0x1563650': 'countdown_reset',
-    'main+0x15648d0': 'wait_enter', 'main+0x1566758': 'host_branch',
+    'main+0x15648d0': 'wait_enter', 'main+0x1566758': 'host_branch', 'main+0x168db60': 'local_state',
 }
 
 
@@ -74,6 +74,8 @@ def describe(kind, r):
         return f'practice net event type={cap(r, 0)} -> state 3'
     if kind == 'practice_leave':
         return f'practice leave state age={cap(r, 0)} mask={cap(r, 1)}'
+    if kind == 'local_state':
+        return f'local member state -> {num(regs.get("x1"))} (lr={regs.get("x30")})'
     if kind == 'quit_request':
         return f'Leave Battle requested (lr={regs.get("x30")})'
     if kind in ('round_start', 'round_ensure'):
