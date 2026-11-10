@@ -99,19 +99,25 @@ POINTS = [
     {'target': 'main+0x1566758', 'rate_limit': 1, 'captures': [{'expression': 'x19+0x180', 'type': 'u32'}]},
     # Rematch-path diff (primary 21:36Z): PracticeScene's menu gate (vtable slot 15, x0 = the scene): who asks
     # whether the waiting menu may open, and the context it reads.
+    # The two matchmaking routes into a lobby: the search start's .16b52f0 (from the CSS), and the rematch re-entry's
+    # .169edd0(svc, 1) -> .16a0ce0 or its async .16a0c60 (search again from inside the lobby).
+    {'target': 'main+0x16b52f0', 'registers': ['x0', 'x30'], 'backtrace': True},
+    {'target': 'main+0x169edd0', 'registers': ['x0', 'x1', 'x30'], 'backtrace': True},
+    {'target': 'main+0x16a0ce0', 'registers': ['x0', 'x30'], 'backtrace': True},
+    {'target': 'main+0x16a0c60', 'registers': ['x0', 'x30'], 'backtrace': True},
     # It is polled every frame by the scene framework (.17f30dc, yrm01), so it doubles as a 4 Hz sampler of the
     # state the Leave Battle tab could depend on: PracticeScene's context, the service's round/room words
     # (+0x26a30.., which .169edd0(svc, 1) resets on a rematch), its flags +0x223c0 and members 0/1 (state +0x210e0).
     {'target': 'main+0x18512c0', 'registers': ['x0', 'x30'], 'backtrace': True, 'rate_limit': 4,
      'captures': [{'expression': '[x0+0x58]+0xe0', 'type': 'bytes', 'size': 64},
                   {'expression': '[x0+0x58]+0x120', 'type': 'bytes', 'size': 16},
-                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x70', 'type': 'bytes', 'size': 16},
+                  {'expression': '[[[pc+0x3a73998]+8]+0x88]+0x70', 'type': 'bytes', 'size': 16},
                   {'expression': '[x0+0x58]+0x130', 'type': 'bytes', 'size': 208},
-                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x26a30', 'type': 'bytes', 'size': 160},
-                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x223c0', 'type': 'bytes', 'size': 8},
-                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x210c0', 'type': 'bytes', 'size': 48},
-                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x212a0', 'type': 'bytes', 'size': 48},
-                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x9ff0', 'type': 'bytes', 'size': 16}]},
+                  {'expression': '[[[pc+0x3a73998]+8]+0x88]+0x26a30', 'type': 'bytes', 'size': 160},
+                  {'expression': '[[[pc+0x3a73998]+8]+0x88]+0x223c0', 'type': 'bytes', 'size': 8},
+                  # members 0 and 1 (stride 0x1e0; state +0x20): one capture, Eden allows 8 per point
+                  {'expression': '[[[pc+0x3a73998]+8]+0x88]+0x210c0', 'type': 'bytes', 'size': 0x210},
+                  {'expression': '[[[pc+0x3a73998]+8]+0x88]+0x9ff0', 'type': 'bytes', 'size': 16}]},
 ]
 
 

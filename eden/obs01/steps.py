@@ -20,6 +20,7 @@ REFS = HERE / 'refs'
 MAIN_REF = REFS / 'main.png'
 BANNER_ROI = [200, 110, 600, 240]       # READY TO FIGHT banner (ready-banner gate)
 TAB_BOX = [45, 4, 295, 58]              # the waiting menu's "Leave Battle" tab, 1280x674 frame
+P2_BOX = [390, 572, 606, 620]           # the lobby's P2 slot ("Waiting..." when nobody joined)
 MENU_BOX = [75, 125, 340, 158]          # the waiting menu's "Training Partners" header (Plus opens it there)
 DIALOG_ROI = [440, 285, 840, 325]       # a centered two-button dialog's text line (Rematch?, Leave?)
 SESSION = re.compile(r'session slot=\d+ kind=online')
@@ -188,6 +189,11 @@ def ready_and_wait_searching(ctx, tag='w', cap_s=90):
 def _tab_shown(ctx, shot):
     # The reference is the ROI itself (compared with b_is_roi; a full-frame compare pads it with black).
     return ctx.runner.roi_diff(str(shot), str(REFS / 'leave-battle-tab.png'), list(TAB_BOX), True) < 12
+
+
+def _p2_joined(ctx, shot):
+    """The P2 slot of this lobby is taken ("Preparing..."/"Joined!"), not the grey "Waiting..." (ROI reference)."""
+    return ctx.runner.roi_diff(str(shot), str(REFS / 'p2-waiting.png'), list(P2_BOX), True) > 25
 
 
 def _menu_shown(ctx, shot):
@@ -638,7 +644,8 @@ def ready_until_searching(ctx, tag='rs', tries=3, wait_s=25.0):
     raise RuntimeError(f'{ctx.on}: no search start after {tries} Readys')
 
 
-def pause_during_join(ctx, tag='pj', join_cap_s=90, cap_s=90, leave=True, peer_host=None, peer_trace=None):
+def pause_during_join(ctx, tag='pj', join_cap_s=90, cap_s=90, leave=True, peer_host=None, peer_trace=None,
+                      wait_p2=False):
     """This instance waits in its lobby. From the moment the peer's trace shows it in a room (parent 8), press Plus
     until the waiting menu is open and take a frame every second: is "Leave Battle" there while the peer loads? With
     `leave`, take it (Up, A, Yes on "leave the game?"). Ends when this instance left, its match was found, or `cap_s`.
@@ -662,6 +669,24 @@ def pause_during_join(ctx, tag='pj', join_cap_s=90, cap_s=90, leave=True, peer_h
         out['outcome'] = 'none'
         _save(ctx, f'{tag}-try-leave', out)
         raise RuntimeError(f'{peer} did not get a room within {join_cap_s} s')
+    if wait_p2:
+        # The peer's own room is not this room (srm06 m2: both waited alone): wait, without input, until this
+        # instance's P2 slot is taken (a member joined this room), then pause.
+        began = time.monotonic()
+        while time.monotonic() - began < join_cap_s:
+            ctx.check_stop()
+            shot = ctx.shot(f'{tag}-p2')
+            if _p2_joined(ctx, shot):
+                out['p2_joined_s'] = round(time.monotonic() - began, 1)
+                out['p2_shot'] = str(shot)
+                break
+            if _match_in_trace(runner, on, start):
+                break
+            time.sleep(0.3)
+        else:
+            out['outcome'] = 'none'
+            _save(ctx, f'{tag}-try-leave', out)
+            raise RuntimeError(f'nobody joined this room within {join_cap_s} s')
     began = time.monotonic()
     while time.monotonic() - began < cap_s:
         ctx.check_stop()
