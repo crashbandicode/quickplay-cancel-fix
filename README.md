@@ -22,6 +22,11 @@ the plugin (0.2.0 left the 2 in place, so its count ran one ahead, and in
 Eden the first rematch match after it froze the opponent's game). The Leave
 Battle tab, the dialog and the leave are the game's own.
 
+The same count decides whether the lobby shows an opponent's name: the game
+shows "???" for a member you haven't played yet. Since 0.2.1 the plugin
+shows the opponent's real name instead. It changes only what that one check
+reads, never the stored counts.
+
 **Before** (no plugin):
 
 ![Before: the opponent joins and Pause has no Leave Battle](docs/media/before.gif)
