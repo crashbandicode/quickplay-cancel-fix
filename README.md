@@ -14,9 +14,13 @@ character select behaves like the rematch lobby. The game keeps a count of
 the battles played per player in the room. It resets the count when you
 come from the character select and keeps it on a rematch, and you can leave
 during the opponent's loading only when your own count is 2 or more. The
-plugin sets your own count from 1 to 2, which is what one battle and a
-rematch leave there. The Leave Battle tab, the dialog and the leave are the
-game's own.
+plugin sets your own count from 1 to 2 while you wait in that lobby, which
+is what one battle and a rematch leave there, and puts the 1 back when the
+lobby ends (the match starts or you leave). After each battle your console
+then counts your slot exactly as your opponent's console does, as without
+the plugin (0.2.0 left the 2 in place, so its count ran one ahead, and in
+Eden the first rematch match after it froze the opponent's game). The Leave
+Battle tab, the dialog and the leave are the game's own.
 
 **Before** (no plugin):
 
