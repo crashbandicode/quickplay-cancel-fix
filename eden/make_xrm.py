@@ -54,30 +54,25 @@ def build(src, key, peer):
                 step('ready_and_wait_session', 'a', tag='t1', cap_s=150),
                 step('battle_self', 'a', tag='t1'),
                 step('settle', 'a', wait_s=40.0)]},
-            {'id': 'm1-rematch', 'start': 'css', 'end': 'a-lobby', 'budget_min': 12, 'steps': [
-                step('wait_peer', 'a', host=ph, trace=pt, condition='searching', cap_s=300, tag='m1'),
-                step('css_to_banner', 'a'),
-                step('ready_and_wait_session', 'a', tag='m1', cap_s=150),
-                step('battle_self', 'a', tag='m1'),
-                step('rematch_self', 'a', answer='yes', tag='m1')]},
-            {'id': 'm2-native', 'start': 'a-lobby', 'end': 'tried', 'budget_min': 8, 'steps': [
-                gif('m2-a-rematch-lobby', "native reference: a's lobby re-entered by Rematch Yes, b joins from "
-                    "another PC, a pauses during b's loading (the operator's working cancel); raw take",
-                    step('pause_during_join', 'a', tag='m2', join_cap_s=240, cap_s=80, peer_host=ph,
-                         peer_trace=pt))]},
-            {'id': 'm2-after', 'start': 'tried', 'end': 'css', 'budget_min': 8, 'steps': [
-                step('play_if_matched', 'a', tag='m2', wait_s=20),
-                step('where_are', 'a', tag='m2-after', wait_s=3.0)]},
             {'id': 'm3-before', 'start': 'css', 'end': 'tried', 'budget_min': 10, 'steps': [
                 step('wait_peer', 'a', host=ph, trace=pt, condition='at_css', cap_s=300, tag='m3'),
                 step('ensure_searching', 'a', tag='m3w'),
-                gif('m3-a-css-lobby', "README 'before' take: a's lobby entered from the character select, b joins "
-                    "from another PC, a pauses during b's loading: no cancel; raw take",
-                    step('pause_during_join', 'a', tag='m3', join_cap_s=240, cap_s=80, peer_host=ph,
+                gif('m3-a-css-lobby', "README 'before' take: a's lobby entered from the character select (a hosts), b "
+                    "joins from another PC, a pauses during b's loading: no cancel; raw take",
+                    step('pause_during_join', 'a', tag='m3', join_cap_s=240, cap_s=80, wait_p2=True, peer_host=ph,
                          peer_trace=pt))]},
-            {'id': 'm3-after', 'start': 'tried', 'end': 'css', 'budget_min': 8, 'steps': [
-                step('play_if_matched', 'a', tag='m3', wait_s=20),
-                step('where_are', 'a', tag='m3-after', wait_s=3.0)]},
+            {'id': 'm3-after', 'start': 'tried', 'end': 'a-lobby', 'budget_min': 12, 'steps': [
+                step('battle_self', 'a', tag='m3'),
+                step('rematch_self', 'a', answer='yes', tag='m3')]},
+            {'id': 'm5-native', 'start': 'a-lobby', 'end': 'tried', 'budget_min': 9, 'steps': [
+                gif('m5-a-host-rematch-lobby', "native reference: a hosted, answered Rematch Yes; b searches again from "
+                    "another PC and joins a's reopened lobby; a pauses during b's loading; raw take",
+                    step('pause_during_join', 'a', tag='m5', join_cap_s=240, cap_s=80, wait_p2=True, peer_host=ph,
+                         peer_trace=pt))]},
+            {'id': 'm5-after', 'start': 'tried', 'end': 'css', 'budget_min': 8, 'steps': [
+                step('where_are', 'a', tag='m5-left', wait_s=8.0),
+                step('play_if_matched', 'a', tag='m5', wait_s=20),
+                step('where_are', 'a', tag='m5-after', wait_s=3.0)]},
         ]
     else:
         new += [
@@ -87,21 +82,15 @@ def build(src, key, peer):
                 step('ready_and_wait_searching', 'b', tag='w1')]},
             {'id': 't1-throwaway', 'start': 'b-searching', 'end': 'css', 'budget_min': 14, 'steps': [
                 step('play_if_matched', 'b', tag='t1', wait_s=600)]},
-            {'id': 'm1-rematch', 'start': 'css', 'end': 'css', 'budget_min': 14, 'steps': [
-                step('wait_peer', 'b', host=ph, trace=pt, condition='at_css', cap_s=300, tag='m1'),
-                step('ready_until_searching', 'b', tag='m1w'),
-                step('play_if_matched', 'b', tag='m1', wait_s=240, answer='no')]},
-            {'id': 'm2-native', 'start': 'css', 'end': 'css', 'budget_min': 10, 'steps': [
-                step('wait_peer', 'b', host=ph, trace=pt, condition='rematch_lobby', cap_s=240, tag='m2'),
-                step('ready_until_searching', 'b', tag='m2w'),
-                step('play_if_matched', 'b', tag='m2', wait_s=120),
-                step('where_are', 'b', tag='m2-after', wait_s=3.0)]},
-            {'id': 'm3-before', 'start': 'css', 'end': 'css', 'budget_min': 12, 'steps': [
-                step('leave_if_searching', 'b', tag='m3b'),
+            {'id': 'm3-before', 'start': 'css', 'end': 'css', 'budget_min': 16, 'steps': [
                 step('wait_peer', 'b', host=ph, trace=pt, condition='searching', cap_s=300, tag='m3'),
                 step('ready_until_searching', 'b', tag='m3w'),
-                step('play_if_matched', 'b', tag='m3', wait_s=120),
-                step('where_are', 'b', tag='m3-after', wait_s=3.0)]},
+                step('play_if_matched', 'b', tag='m3', wait_s=240, answer='no')]},
+            {'id': 'm5-native', 'start': 'css', 'end': 'css', 'budget_min': 12, 'steps': [
+                step('wait_peer', 'b', host=ph, trace=pt, condition='rematch_lobby', cap_s=300, tag='m5'),
+                step('ready_until_searching', 'b', tag='m5w'),
+                step('play_if_matched', 'b', tag='m5', wait_s=150),
+                step('where_are', 'b', tag='m5-after', wait_s=3.0)]},
         ]
     z = dict(keep[f'z-{key}'])
     z['start'] = 'css'
