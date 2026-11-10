@@ -87,6 +87,37 @@ pub const WAIT: Site = Site {
     ],
 };
 
+/// The waiting battle's member pass (`.15637a0`), its count load for a slot
+/// (`.1563ef8`): `mov w9, #0xee34; movk w9, #4, lsl #16; ldr w8, [x8, x9];
+/// cmp w8, #1; b.hi`. On entry x8 is the slot's record (`madd x8, x26, #0xb0,
+/// x23`, x23 = `COUNT_OBJECT`), x26 the slot. With a count below 2 the pass
+/// names that member "???" (`mel_mockbattle_name_unknown`); on Eden it runs
+/// for the opponents' slots only (qcf-xfz5: never for the own slot). 8-byte
+/// aligned, so a far jump takes these four words: no PC-relative
+/// instruction, no branch into them (`re/branch_into.py`), the flags are set
+/// by their own `cmp`, and `.15637a0` does not use x17.
+pub const GATE_OFFSET: usize = 0x1563ef8;
+pub const GATE: Site = Site {
+    name: "names",
+    offset: GATE_OFFSET,
+    kind: Kind::Hooked,
+    guard: [
+        0x89, 0xc6, 0x9d, 0x52, 0x89, 0x00, 0xa0, 0x72, 0x08, 0x69, 0x69, 0xb8, 0x1f, 0x05, 0x00,
+        0x71, 0x08, 0x04, 0x00, 0x54, 0x08, 0xed, 0x01, 0xd0, 0x08, 0xf1, 0x40, 0xb9, 0xe9, 0xdf,
+        0x9f, 0x52, 0xc9, 0x1f, 0xbf, 0x72, 0x09, 0x01, 0x09, 0x0b, 0x3f, 0x09, 0x00, 0x71, 0x23,
+        0x01, 0x00, 0x54, 0x09, 0x00, 0x81, 0x52, 0x29, 0xe0, 0xa0, 0x72, 0x1f, 0x01, 0x09, 0x6b,
+        0xa0, 0x00, 0x00, 0x54,
+    ],
+};
+/// At `GATE`: the register with the slot's record, the one with the slot, and
+/// the record-relative offset the load adds (the count).
+pub const GATE_RECORD_REGISTER: usize = 8;
+pub const GATE_SLOT_REGISTER: usize = 26;
+pub const GATE_COUNT_OFFSET: usize = 0x4ee34;
+/// The object the records are in: object + `GATE_COUNT_OFFSET` is slot 0's
+/// count.
+pub const COUNT_OBJECT: usize = 0x52c5180;
+
 /// The character-select entry's reset (IngameCallSequenceScene state 0,
 /// `.230c160`): `adrp x9, 0x5313000; add x9, x9, #0xfb4; orr w10, wzr, #1`,
 /// then `str w10` at `+0`, `+0xb0`, ... `+0x4d0`: every slot's count to 1.
@@ -153,10 +184,10 @@ pub const MODE_READ: Site = Site {
 };
 
 /// Every site checked before anything is installed.
-pub const SITES: [&Site; 5] = [&WAIT, &COUNT_RESET, &COUNT_BUMP, &STATION_OF, &MODE_READ];
+pub const SITES: [&Site; 6] = [&WAIT, &GATE, &COUNT_RESET, &COUNT_BUMP, &STATION_OF, &MODE_READ];
 
 /// The main-image offsets this plugin hooks.
-pub const HOOKED_SITES: [usize; 1] = [WAIT_OFFSET];
+pub const HOOKED_SITES: [usize; 2] = [WAIT_OFFSET, GATE_OFFSET];
 
 /// `*(*(*(base + SERVICE) + 8) + 0x88)` is the online service.
 pub const SERVICE: usize = 0x52c4c58;
@@ -211,6 +242,16 @@ pub fn adopt(mode: u32, count: u32) -> Option<u32> {
 /// (anything else is the game's own value and stays).
 pub fn restore(count: u32) -> Option<u32> {
     (count == REMATCH_COUNT).then_some(FRESH_COUNT)
+}
+
+/// What the member pass's load at `GATE` should read for `slot` instead of
+/// its stored `count`: in Quickplay, for an opponent's slot (this console's
+/// own slot known and not `slot`) whose stored count is below 2 (the "???"
+/// rule), the rematch count, so the opponent's name shows; `None` keeps the
+/// stored value. The stored counts are not written.
+pub fn shown(mode: u32, slot: usize, own: Option<usize>, count: u32) -> Option<u32> {
+    let opponent = own.is_some_and(|own| own != slot);
+    (mode == QUICKPLAY && opponent && count < REMATCH_COUNT).then_some(REMATCH_COUNT)
 }
 
 /// One waiting-area frame: the slot the plugin raised and has not put back
@@ -363,7 +404,9 @@ mod tests {
         // TrainingRooms fingerprints .236b470+0x104, .1851480+0x100, .18512c0+0x50 and .1851310+0x30: the hook
         // is outside them.
         for (start, len) in [(0x236b470, 0x104), (0x1851480, 0x100), (0x18512c0, 0x50), (0x1851310, 0x30)] {
-            assert!(WAIT_OFFSET + 64 <= start || WAIT_OFFSET >= start + len);
+            for site in SITES.iter().filter(|s| s.kind == Kind::Hooked) {
+                assert!(site.offset + 64 <= start || site.offset >= start + len, "{}", site.name);
+            }
         }
     }
 
@@ -498,6 +541,45 @@ mod tests {
         assert_eq!(room.counts[0], REMATCH_COUNT);
         let room = Room::from_character_select().with_plugin(0);
         assert_eq!(room.counts[0], REMATCH_COUNT);
+    }
+
+    #[test]
+    fn the_names_site_is_the_member_passs_count_load() {
+        // mov w9, #0xee34; movk w9, #4, lsl #16; ldr w8, [x8, x9]; cmp w8, #1; b.hi
+        let gate = GATE.stock();
+        assert_eq!(gate[0], 0x529d_c689);
+        assert_eq!(gate[1], 0x72a0_0089);
+        let offset = ((gate[0] >> 5) & 0xffff) as usize | (((gate[1] >> 5) & 0xffff) as usize) << 16;
+        assert_eq!(offset, GATE_COUNT_OFFSET);
+        assert_eq!(gate[2], 0xb869_6908, "ldr w8, [x8, x9]");
+        assert_eq!(((gate[2] >> 5) & 31) as usize, GATE_RECORD_REGISTER);
+        assert_eq!(gate[3], 0x7100_051f, "cmp w8, #1: a count below 2 is the \"???\" rule");
+        assert_eq!(gate[4] & 0xff00_001f, 0x5400_0008, "b.hi");
+        assert_eq!(COUNT_OBJECT + GATE_COUNT_OFFSET, SLOT_COUNT);
+        assert_eq!(GATE_OFFSET % 8, 0, "a far jump takes 4 words, all before the b.hi");
+        // The names site's 64 bytes reach into the mode read it shares the function with; both stay checked.
+        assert_eq!(MODE_READ.offset - GATE_OFFSET, 5 * 4);
+        assert_eq!(GATE.guard[20..64], MODE_READ.guard[..44]);
+    }
+
+    #[test]
+    fn opponents_show_their_names_and_nothing_is_written() {
+        // An opponent the console hasn't played (count 1) or an unset count: read as 2, so the name shows.
+        for (own, slot) in [(1, 0), (0, 1), (3, 2)] {
+            for count in [0, FRESH_COUNT] {
+                assert_eq!(shown(QUICKPLAY, slot, Some(own), count), Some(REMATCH_COUNT), "{own} {slot} {count}");
+            }
+            // Already 2 or more (a rematch): the stored value.
+            for count in [2, 3, 7] {
+                assert_eq!(shown(QUICKPLAY, slot, Some(own), count), None);
+            }
+            // The own slot (never compared there on Eden) and an unknown own slot: the stored value.
+            assert_eq!(shown(QUICKPLAY, own, Some(own), FRESH_COUNT), None);
+            assert_eq!(shown(QUICKPLAY, slot, None, FRESH_COUNT), None);
+        }
+        for mode in [0, 0x0701_0102, 0x0701_0400, 0x0701_0800, 0x0202_0000] {
+            assert_eq!(shown(mode, 0, Some(1), FRESH_COUNT), None, "mode {mode:#x}");
+        }
     }
 
     #[test]

@@ -140,6 +140,39 @@ unsafe extern "C" fn wait_frame(ctx: &mut InlineCtx) {
     }
 }
 
+/// What the member pass's count load reads for an opponent the console hasn't
+/// played yet (`model::shown`); the stored count is not touched.
+static SHOWN: u32 = model::REMATCH_COUNT;
+
+/// The member pass's count load (`model::GATE`), before `ldr w8, [x8, x9]`
+/// with x9 = `GATE_COUNT_OFFSET`: for an opponent's slot of a Quickplay lobby
+/// whose stored count is below 2, x8 is pointed so that this one load reads
+/// `SHOWN` (the opponent's name instead of "???"). Every other call reads a
+/// word or two and returns.
+unsafe extern "C" fn names_load(ctx: &mut InlineCtx) {
+    let mode = read_u32(base() + model::MODE as u64);
+    if mode != model::QUICKPLAY {
+        return;
+    }
+    let slot = ctx.registers[model::GATE_SLOT_REGISTER].x() as usize;
+    let record = ctx.registers[model::GATE_RECORD_REGISTER].x();
+    if slot >= model::SLOTS || record != base() + (model::COUNT_OBJECT + slot * model::SLOT_STRIDE) as u64 {
+        return;
+    }
+    let stored = read_u32(record + model::GATE_COUNT_OFFSET as u64);
+    if stored >= model::REMATCH_COUNT {
+        return;
+    }
+    let own = match service() {
+        Some(svc) => model::own_slot(&slot_stations(), own_station(svc)),
+        None => None,
+    };
+    if model::shown(mode, slot, own, stored).is_some() {
+        let at = &SHOWN as *const u32 as u64;
+        ctx.registers[model::GATE_RECORD_REGISTER].set_x(at.wrapping_sub(model::GATE_COUNT_OFFSET as u64));
+    }
+}
+
 type Path = Line<96>;
 
 fn path(args: core::fmt::Arguments) -> Path {
@@ -416,6 +449,9 @@ pub fn main() {
             let (entry, outcome) = unsafe { hook(&model::WAIT, wait_frame) };
             let _ = write!(report, " {}={}/{}", model::WAIT.name, entry.name(), outcome.name());
             if outcome.hooked() {
+                // The names are a separate hook: without it the tab and the counts still work.
+                let (entry, outcome) = unsafe { hook(&model::GATE, names_load) };
+                let _ = write!(report, " {}={}/{}", model::GATE.name, entry.name(), outcome.name());
                 "installed"
             } else {
                 "not_installed"
