@@ -1,4 +1,5 @@
-"""Host tests for tools/verdict.py, tools/gifcheck.py and tools/timeline.py (python3 -m unittest)."""
+"""Host tests for tools/verdict.py, tools/gifcheck.py, tools/gif_frames.py and tools/timeline.py
+(python3 -m unittest)."""
 import json
 import sys
 import tempfile
@@ -113,6 +114,28 @@ class Verdicts(unittest.TestCase):
                 path.parent.mkdir()
                 path.write_text(json.dumps(data))
             self.assertEqual(verdict.leave_tries(tmp), [('af', True, 1.29, 'left'), ('bf', False, None, 'matched')])
+
+    def test_splice_keeps_the_pieces_in_order_with_their_times(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest('Pillow missing')
+        import gif_frames
+        with tempfile.TemporaryDirectory() as tmp:
+            one, two, out = Path(tmp) / 'one.gif', Path(tmp) / 'two.gif', Path(tmp) / 'out.gif'
+            reds = [Image.new('RGB', (64, 36), (40 * i, 0, 0)) for i in range(5)]
+            blues = [Image.new('RGB', (64, 36), (0, 0, 40 * i + 40)) for i in range(5)]
+            reds[0].save(one, save_all=True, append_images=reds[1:], duration=1000, loop=0)
+            blues[0].save(two, save_all=True, append_images=blues[1:], duration=500, loop=0)
+            # 1.5-3.0 s of one (frames 1 and 2, 0.5 s and 1 s shown), then 0-1 s of two (frames 0 and 1).
+            frames, seconds = gif_frames.splice(out, [(one, 1.5, 3.0), (two, 0.0, 1.0)])
+            self.assertEqual(frames, 4)
+            self.assertAlmostEqual(seconds, 2.5)
+            times = gif_frames.timeline(out)
+            self.assertEqual([round(d, 3) for _, d in times], [0.5, 1.0, 0.5, 0.5])
+            with Image.open(out) as image:
+                image.seek(2)
+                self.assertEqual(image.convert('RGB').getpixel((0, 0)), (0, 0, 40))
 
     def test_check_gif_measures_width_and_length(self):
         try:

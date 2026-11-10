@@ -5,6 +5,7 @@ Usage:
   gif_frames.py info <in.gif>
   gif_frames.py frames <in.gif> <out dir> <t0> <t1> [<step s>]      PNGs of the frames shown at t0, t0+step, ... (s)
   gif_frames.py cut <in.gif> <out.gif> <t0> <t1>                     the frames shown between t0 and t1 (s)
+  gif_frames.py splice <out.gif> <in.gif> <t0> <t1> [<in.gif> <t0> <t1> ...]   pieces of takes, in order, as one GIF
 """
 import sys
 from pathlib import Path
@@ -46,6 +47,22 @@ def cut(src, dst, t0, t1):
     return len(frames), sum(durations) / 1000
 
 
+def splice(dst, parts):
+    """One GIF from (src, t0, t1) pieces in order, each cut as `cut` does; returns (frames, seconds)."""
+    frames, durations = [], []
+    for src, t0, t1 in parts:
+        times = timeline(src)
+        with Image.open(src) as image:
+            for i, (start, d) in enumerate(times):
+                if start + d <= t0 or start >= t1:
+                    continue
+                image.seek(i)
+                frames.append(image.convert('RGB'))
+                durations.append(max(20, int(round((min(start + d, t1) - max(start, t0)) * 1000))))
+    frames[0].save(dst, save_all=True, append_images=frames[1:], duration=durations, loop=0, optimize=True)
+    return len(frames), sum(durations) / 1000
+
+
 def main(argv):
     mode = argv[0]
     if mode == 'info':
@@ -71,6 +88,12 @@ def main(argv):
     if mode == 'cut':
         n, seconds = cut(argv[1], argv[2], float(argv[3]), float(argv[4]))
         print(f'{argv[2]}: {n} frames, {seconds:.2f} s')
+        return 0
+    if mode == 'splice':
+        rest = argv[2:]
+        parts = [(rest[k], float(rest[k + 1]), float(rest[k + 2])) for k in range(0, len(rest) - 2, 3)]
+        n, seconds = splice(argv[1], parts)
+        print(f'{argv[1]}: {n} frames, {seconds:.2f} s from {len(parts)} piece(s)')
         return 0
     print(__doc__)
     return 2
