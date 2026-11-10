@@ -198,7 +198,11 @@ def _menu_shown(ctx, shot):
 def _left_in_trace(ctx, start):
     """PracticeScene entered its leave state (4) since `start` in this instance's trace."""
     path = ctx.runner.instances[ctx.on].get('trace_jsonl') or ''
-    return any((s['kind'] == 'practice_state' and s['x8'] == '0x4') or s['kind'] in ('practice_leave', 'quit_request')
+    # Quickplay's "leave the game" ends PracticeScene with result 4 (yrm01 m2b: exit, result 4, child 1); Local
+    # Wireless rooms go through PracticeScene state 4.
+    return any((s['kind'] == 'practice_state' and s['x8'] == '0x4')
+               or (s['kind'] == 'practice_result' and s['x8'] in ('0x4', '0x5'))
+               or s['kind'] in ('practice_leave', 'quit_request')
                for s in _states(_trace_records(path, start)))
 
 
@@ -360,15 +364,20 @@ def _explore_menu(ctx, tag, start, menu_shot):
         steps.append({'button': 'up', 'tab_unfocused': _tab_shown(ctx, shot), 'shot': str(shot)})
         ctx.press('a', 120)
         time.sleep(1.2)
-        out['after_a'] = str(ctx.shot(f'{tag}-x-after-a'))
-        for direction in ('right', 'left'):
-            if _left_in_trace(ctx, start):
-                break
-            ctx.press(direction, 120)
+        dialog = ctx.shot(f'{tag}-x-after-a')
+        out['after_a'] = str(dialog)
+        # "Would you like to leave the game?" opens on No (yrm01 m2b): move to Yes only when the frame shows No.
+        focus = _dialog_focus(dialog)
+        out['dialog_focus'] = focus
+        if focus == 'no':
+            ctx.press('right', 120)
             time.sleep(0.5)
+            dialog = ctx.shot(f'{tag}-x-yes-focus')
+            out['yes_focus'] = str(dialog)
+        if _dialog_focus(dialog) == 'yes':
             ctx.press('a', 120)
-            time.sleep(1.5)
-            out.setdefault('confirm', []).append(str(ctx.shot(f'{tag}-x-confirm-{direction}')))
+            time.sleep(2.0)
+            out['confirm'] = str(ctx.shot(f'{tag}-x-confirmed'))
         out['left'] = _left_in_trace(ctx, start)
     else:
         for button in ('up', 'up', 'up', 'l', 'r', 'zl', 'zr'):
@@ -418,7 +427,7 @@ def explore_waiting(ctx, tag='ex', cap_s=60, ready=False):
                                       'leave_confirmed', 'quit_request', 'practice_leave')]
     out['outcome'] = ('left' if _left_in_trace(ctx, start) else
                       'matched' if _match_in_trace(runner, on, start) else 'none')
-    out['frames'] = {k: str(runner.shot(k, f'{tag}-end')) for k in ('a', 'b')}
+    out['frames'] = {k: str(runner.shot(k, f'{tag}-end')) for k in ctx.runner.instances}
     _save(ctx, f'{tag}-try-leave', out)
     return {'outcome': out['outcome'], 'events': len(out['events'])}
 
@@ -440,7 +449,7 @@ def after_soft(ctx, tag='m', settle_s=60.0, cap_s=240.0):
     select) and noted. A sudden death after a time-out (a second detector session) is waited out too, then the
     Rematch? countdown."""
     runner = ctx.runner
-    starts = {k: _size(runner.instances[k]['detector_log']) for k in ('a', 'b')}
+    starts = {k: _size(runner.instances[k]['detector_log']) for k in ctx.runner.instances}
     out = {}
     try:
         out['after'] = after_try(ctx, tag)
@@ -463,7 +472,7 @@ def after_soft(ctx, tag='m', settle_s=60.0, cap_s=240.0):
         time.sleep(35.0)   # results, then the Rematch? countdown
     out['marks'] = marks
     out['waited_extra_s'] = round(time.monotonic() - began, 1)
-    out['frames'] = {k: str(runner.shot(k, f'{tag}-soft')) for k in ('a', 'b')}
+    out['frames'] = {k: str(runner.shot(k, f'{tag}-soft')) for k in ctx.runner.instances}
     return _save(ctx, f'{tag}-after-soft', out)
 
 
@@ -489,17 +498,387 @@ def leave_after_peer_joins(ctx, tag='hl', delay_s=4.0, join_cap_s=60, cap_s=60):
             break
         time.sleep(0.5)
     _save(ctx, f'{tag}-peer-joined', {'peer': peer, 'joined_after_s': joined,
-                                      'frames': {k: str(ctx.runner.shot(k, f'{tag}-joined')) for k in ('a', 'b')}})
+                                      'frames': {k: str(ctx.runner.shot(k, f'{tag}-joined')) for k in ctx.runner.instances}})
     if joined is None:
         raise RuntimeError(f'{peer} did not join within {join_cap_s} s')
     time.sleep(delay_s)
     return explore_waiting(ctx, tag=tag, cap_s=cap_s)
 
 
+def _tap(runner, on, button):
+    runner.call(on, 'input.button', {'button': button, 'state': 'tap', 'duration_ms': 100, 'lease_ms': 500})
+
+
+def _where(runner, on):
+    """This instance's last Quickplay parent and IngameCallSequenceScene states from its trace."""
+    states = [s for s in _states(_trace_records(runner.instances[on].get('trace_jsonl') or '', 0))
+              if s['kind'] in ('parent', 'child')]
+    parent = next((s['x8'] for s in reversed(states) if s['kind'] == 'parent'), None)
+    child = next((s['x8'] for s in reversed(states) if s['kind'] == 'child'), None)
+    return {'parent': parent, 'child': child, 'in_lobby': parent == '0x8' and child == '0x3',
+            'at_css': parent == '0x4'}
+
+
+def _dialog_focus(shot):
+    """Which button of the centered two-button dialog is focused (orange): 'no' (left), 'yes' (right) or None."""
+    from PIL import Image
+    with Image.open(shot) as im:
+        rgb = im.convert('RGB')
+        w, h = rgb.size
+        sx, sy = w / 1280.0, h / 674.0
+
+        def orange(x, y):
+            r, g, b = rgb.getpixel((int(x * sx), int(y * sy)))
+            return r > 180 and 60 < g < 170 and b < 90
+        if orange(300, 500):
+            return 'no'
+        if orange(700, 500):
+            return 'yes'
+    return None
+
+
+def rematch_answers(ctx, answers=None, tag='rm', cap_s=180, tolerance=15.0):
+    """After a match: wait for each console's "Rematch?" dialog and answer it ('yes': Right, A; 'no': Left, A; Yes is
+    the right-hand button). Both idle meanwhile (a time-out's sudden death ends by itself). Then where each went
+    (lobby or character select) and frames."""
+    runner = ctx.runner
+    answers = answers or {'a': 'yes', 'b': 'no'}
+    out = {'answers': answers, 'seen': {}, 'diffs': {k: [] for k in answers}}
+    began = time.monotonic()
+    while time.monotonic() - began < cap_s and len(out['seen']) < len(answers):
+        ctx.check_stop()
+        for k, answer in answers.items():
+            if k in out['seen']:
+                continue
+            shot = runner.shot(k, f'{tag}-look')
+            diff = runner.roi_diff(str(shot), str(REFS / 'rematch-dialog.png'), list(DIALOG_ROI))
+            out['diffs'][k] = (out['diffs'][k] + [round(diff, 1)])[-6:]
+            if diff < tolerance:
+                # The focus starts on Yes and Left/Right wrap (yrm01 m1: Right from Yes went to No): move only when
+                # the frame shows the other button focused, then A on the checked focus.
+                focus = _dialog_focus(shot)
+                chosen = shot
+                if focus != answer:
+                    _tap(runner, k, 'right' if answer == 'yes' else 'left')
+                    time.sleep(0.4)
+                    chosen = runner.shot(k, f'{tag}-{answer}-focus')
+                    if _dialog_focus(chosen) != answer:
+                        continue
+                _tap(runner, k, 'a')
+                out['seen'][k] = {'t': round(time.monotonic() - began, 1), 'dialog': str(shot),
+                                  'focus_before': focus, 'focus': str(chosen)}
+        time.sleep(0.5)
+    if len(out['seen']) < len(answers):
+        _save(ctx, f'{tag}-rematch', out)
+        raise RuntimeError(f'no Rematch? dialog on {set(answers) - set(out["seen"])} within {cap_s} s: {out["diffs"]}')
+    time.sleep(12.0)
+    out['after'] = {k: str(runner.shot(k, f'{tag}-after')) for k in answers}
+    out['where'] = {k: _where(runner, k) for k in answers}
+    return _save(ctx, f'{tag}-rematch', out)
+
+
+def where_are(ctx, tag='where', wait_s=0.0):
+    """Frames and the last parent/child states of both instances."""
+    time.sleep(wait_s)
+    out = {k: dict(_where(ctx.runner, k), shot=str(ctx.runner.shot(k, tag))) for k in ctx.runner.instances}
+    return _save(ctx, f'{tag}-where', out)
+
+
+def play_out(ctx, tag='m', cap_s=240.0):
+    """A match is running: both act until it ends (`battle`); an error state or a sudden death is waited out, then the
+    Rematch? countdown (no answer: both to the character select). Records instead of failing."""
+    runner = ctx.runner
+    starts = {k: _size(runner.instances[k]['detector_log']) for k in ctx.runner.instances}
+    out = {}
+    try:
+        out['battle'] = battle(ctx, tag)
+    except RuntimeError as e:
+        out['error'] = str(e)
+        time.sleep(60.0)
+    began = time.monotonic()
+    marks, quiet_since = None, time.monotonic()
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        now = _match_marks(runner, starts)
+        if now != marks:
+            marks, quiet_since = now, time.monotonic()
+        if not any(open_ for _, open_ in now.values()) and time.monotonic() - quiet_since >= 20.0:
+            break
+        time.sleep(3.0)
+    time.sleep(35.0)
+    out['where'] = {k: _where(runner, k) for k in ctx.runner.instances}
+    out['frames'] = {k: str(runner.shot(k, f'{tag}-played')) for k in ctx.runner.instances}
+    return _save(ctx, f'{tag}-play-out', out)
+
+
+def leave_if_searching(ctx, tag='lis'):
+    """If this instance waits in its lobby, leave it the game's way (alone: the Leave Battle tab); else nothing."""
+    where = _where(ctx.runner, ctx.on)
+    if not where['in_lobby']:
+        return _save(ctx, f'{tag}-{ctx.on}', {'where': where, 'left': None})
+    return _save(ctx, f'{tag}-{ctx.on}', {'where': where, 'left': leave_waiting(ctx, tag=tag)})
+
+
+def ready_until_searching(ctx, tag='rs', tries=3, wait_s=25.0):
+    """From the character select: READY, Plus, and check this instance's own trace for its search start (parent 5);
+    again when it doesn't come (yrm01 m2b: a Ready right after a declined rematch didn't register)."""
+    path = _trace_path(ctx) or ''
+    attempts = []
+    for i in range(tries):
+        start = _size(path)
+        attempts.append({'css': css_to_banner(ctx), 'ready': _ready(ctx, f'{tag}-{i}')})
+        began = time.monotonic()
+        while time.monotonic() - began < wait_s:
+            ctx.check_stop()
+            if any(s['kind'] == 'parent' and s['x8'] == '0x5' for s in _states(_trace_records(path, start))):
+                return _save(ctx, f'{tag}-searching-{ctx.on}', {'attempts': attempts, 'try': i})
+            time.sleep(0.5)
+        attempts[-1]['shot'] = str(ctx.shot(f'{tag}-no-search-{i}'))
+    _save(ctx, f'{tag}-searching-{ctx.on}', {'attempts': attempts, 'try': None})
+    raise RuntimeError(f'{ctx.on}: no search start after {tries} Readys')
+
+
+def pause_during_join(ctx, tag='pj', join_cap_s=90, cap_s=90, leave=True, peer_host=None, peer_trace=None):
+    """This instance waits in its lobby. From the moment the peer's trace shows it in a room (parent 8), press Plus
+    until the waiting menu is open and take a frame every second: is "Leave Battle" there while the peer loads? With
+    `leave`, take it (Up, A, Yes on "leave the game?"). Ends when this instance left, its match was found, or `cap_s`.
+    Saves `{tag}-try-leave.json` (outcome left / matched / none) for after_soft."""
+    runner, on = ctx.runner, ctx.on
+    peer = 'a' if on == 'b' else 'b'
+    path = _trace_path(ctx) or ''
+    ppath = peer_trace if peer_host else (_trace_path(ctx, peer) or '')
+    # The peer may have reached its room just before this step: read its latest parent state from a window back.
+    start, pstart = _size(path), max(0, _size(ppath) - 262144)
+    out = {'tag': tag, 'peer': peer, 'looks': []}
+    began = time.monotonic()
+    while time.monotonic() - began < join_cap_s:
+        ctx.check_stop()
+        parents = [s['x8'] for s in _peer_list(ppath, pstart, peer_host) if s['kind'] == 'parent']
+        if parents and parents[-1] == '0x8':
+            out['peer_in_room_s'] = round(time.monotonic() - began, 1)
+            break
+        time.sleep(0.25)
+    else:
+        out['outcome'] = 'none'
+        _save(ctx, f'{tag}-try-leave', out)
+        raise RuntimeError(f'{peer} did not get a room within {join_cap_s} s')
+    began = time.monotonic()
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        t = round(time.monotonic() - began, 2)
+        if _match_in_trace(runner, on, start):
+            out['looks'].append({'t': t, 'what': 'match-found (trace)'})
+            break
+        if _left_in_trace(ctx, start):
+            out['looks'].append({'t': t, 'what': 'left (trace)'})
+            break
+        shot = ctx.shot(f'{tag}-look')
+        menu, tab = _menu_shown(ctx, shot), _tab_shown(ctx, shot)
+        peer_child = next((s['x8'] for s in reversed(_peer_list(ppath, pstart, peer_host)) if s['kind'] == 'child'),
+                          None)
+        out['looks'].append({'t': t, 'menu': menu, 'tab': tab, 'peer_child': peer_child, 'shot': str(shot)})
+        if menu or tab:
+            if tab and leave:
+                got = _explore_menu(ctx, tag, start, shot)
+                out['looks'].append(dict(got, t=round(time.monotonic() - began, 2), what='leave'))
+                if got['left']:
+                    break
+        else:
+            ctx.press('plus', 100)
+        time.sleep(0.8)
+    time.sleep(3.0)
+    out['outcome'] = ('left' if _left_in_trace(ctx, start) else
+                      'matched' if _match_in_trace(runner, on, start) else 'none')
+    out['states'] = [s for s in _states(_trace_records(path, start))
+                     if s['kind'] in ('child', 'parent', 'practice_state', 'practice_result')]
+    out['peer_states'] = [s for s in _peer_list(ppath, pstart, peer_host) if s['kind'] in ('child', 'parent')]
+    out['frames'] = {k: str(runner.shot(k, f'{tag}-end')) for k in ctx.runner.instances}
+    _save(ctx, f'{tag}-try-leave', out)
+    return {'outcome': out['outcome'], 'looks': len(out['looks']), 'peer_in_room_s': out.get('peer_in_room_s')}
+
+
+# --- cross-host pair (primary 2026-11-10 00:05Z: one instance per PC, one driver per host) ---------------------------
+# The peer's state comes from its own trace on its host, read over ssh: only its parent/child state records (grep on
+# the remote side), so a 4 Hz sampler in the trace doesn't make every poll read megabytes.
+
+STATE_RE = r'main\+0x236b4ac|main\+0x23191bc'
+
+
+def _peer_states(host, trace):
+    """The peer's parent/child state changes, oldest first: [{'kind', 'x8', 'x9', 'wall_ns'}]."""
+    import subprocess
+    cmd = ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8', host,
+           f"grep -E '{STATE_RE}' '{trace}' | tail -n 40"]
+    try:
+        text = subprocess.run(cmd, capture_output=True, text=True, timeout=20).stdout
+    except (subprocess.SubprocessError, OSError):
+        return None
+    out = []
+    for line in text.splitlines():
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        kind = _kind(r)
+        if kind in ('parent', 'child') and r.get('event') == 'entry':
+            regs = r.get('registers') or {}
+            out.append({'kind': kind, 'x8': regs.get('x8'), 'x9': regs.get('x9'),
+                        'wall_ns': int(r.get('wall_time_ns') or 0)})
+    return out
+
+
+def _peer_is(states, condition, since_ns=0):
+    """'searching' (in a lobby: parent 8, PracticeScene child 3), 'at_css' (parent 4), 'in_room' (parent 8),
+    'rematch_lobby' (a child 5 -> 3 since `since_ns`, still there)."""
+    if not states:
+        return False
+    parent = next((s['x8'] for s in reversed(states) if s['kind'] == 'parent'), None)
+    child = next((s['x8'] for s in reversed(states) if s['kind'] == 'child'), None)
+    if condition == 'searching':
+        return parent == '0x8' and child == '0x3'
+    if condition == 'at_css':
+        return parent == '0x4'
+    if condition == 'in_room':
+        return parent == '0x8'
+    if condition == 'rematch_lobby':
+        return child == '0x3' and parent == '0x8' and any(
+            s['kind'] == 'child' and s['x9'] == '0x5' and s['x8'] == '0x3' and s['wall_ns'] >= since_ns
+            for s in states)
+    raise ValueError(condition)
+
+
+def _peer_list(path, start, host=None):
+    """The peer's parent/child records: from its local trace after `start`, or (host given) its remote trace."""
+    if host:
+        return _peer_states(host, path) or []
+    return [s for s in _states(_trace_records(path, start)) if s['kind'] in ('parent', 'child')]
+
+
+def wait_peer(ctx, host, trace, condition, cap_s=300, tag='wp', since_s=600):
+    """Wait until the peer (other host) is in `condition` by its own trace. `since_s`: how far back a rematch
+    re-entry may lie."""
+    began = time.monotonic()
+    since_ns = time.time_ns() - int(since_s * 1e9)
+    last = None
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        states = _peer_states(host, trace)
+        if states is not None:
+            last = states[-3:]
+            if _peer_is(states, condition, since_ns):
+                return _save(ctx, f'{tag}-{condition}', {'seconds': round(time.monotonic() - began, 1),
+                                                         'last': last})
+        time.sleep(1.0)
+    _save(ctx, f'{tag}-{condition}', {'timeout_s': cap_s, 'last': last})
+    raise RuntimeError(f'peer not {condition} within {cap_s} s: {last}')
+
+
+def _own_det(ctx):
+    return ctx.runner.instances[ctx.on]['detector_log']
+
+
+def battle_self(ctx, tag='m', cap_s=330, shot_every_s=20.0):
+    """This instance acts (no idle drop) until its own detector logs sync_end; then a sudden death (a second session)
+    is played out too. Returns the sync_end lines; records instead of failing."""
+    runner, on = ctx.runner, ctx.on
+    det = _own_det(ctx)
+    start = max(0, _size(det) - 4096)
+    began, tick, next_shot = time.monotonic(), 0, time.monotonic()
+    out = {'ends': []}
+    try:
+        while time.monotonic() - began < cap_s:
+            ctx.check_stop()
+            text = _tail(det, start)
+            sessions = [m.start() for m in SESSION.finditer(text)]
+            ends = list(SYNC_END.finditer(text))
+            if ends and (not sessions or ends[-1].start() > sessions[-1]):
+                out['ends'] = [m.group(0) for m in ends]
+                # a sudden death starts a new session within a few seconds of a time-out
+                quiet = time.monotonic()
+                while time.monotonic() - quiet < 12.0:
+                    time.sleep(1.0)
+                    text = _tail(det, start)
+                    sessions = [m.start() for m in SESSION.finditer(text)]
+                    if sessions and sessions[-1] > ends[-1].start():
+                        break
+                else:
+                    break
+                continue
+            _vary_still(runner, on, tick)
+            tick += 1
+            if time.monotonic() >= next_shot:
+                runner.shot(on, f'{tag}-battle-{int(time.monotonic() - began):03d}s')
+                next_shot += shot_every_s
+            time.sleep(0.5)
+    finally:
+        runner.call(on, 'input.reset')
+    out['seconds'] = round(time.monotonic() - began, 1)
+    out['desync_free'] = bool(out['ends']) and all('desync_seen=0' in e for e in out['ends'])
+    return _save(ctx, f'{tag}-battle-{on}', out)
+
+
+def rematch_self(ctx, answer='no', tag='rm', cap_s=150, tolerance=15.0):
+    """This instance's "Rematch?" dialog: answer it ('yes'/'no'; the focus is read from the frame, Left/Right wrap),
+    then where it went. Records a missing dialog instead of failing."""
+    runner, on = ctx.runner, ctx.on
+    out = {'answer': answer, 'diffs': []}
+    began = time.monotonic()
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        shot = runner.shot(on, f'{tag}-look')
+        diff = runner.roi_diff(str(shot), str(REFS / 'rematch-dialog.png'), list(DIALOG_ROI))
+        out['diffs'] = (out['diffs'] + [round(diff, 1)])[-6:]
+        if diff < tolerance:
+            focus = _dialog_focus(shot)
+            chosen = shot
+            if focus != answer:
+                _tap(runner, on, 'right' if answer == 'yes' else 'left')
+                time.sleep(0.4)
+                chosen = runner.shot(on, f'{tag}-{answer}-focus')
+                if _dialog_focus(chosen) != answer:
+                    continue
+            _tap(runner, on, 'a')
+            out.update(seen_s=round(time.monotonic() - began, 1), dialog=str(shot), focus_before=focus,
+                       focus=str(chosen))
+            break
+        time.sleep(0.5)
+    time.sleep(12.0)
+    out['after'] = str(runner.shot(on, f'{tag}-after'))
+    out['where'] = _where(runner, on)
+    return _save(ctx, f'{tag}-rematch-{on}', out)
+
+
+def play_if_matched(ctx, tag='m', wait_s=120, answer=None):
+    """Wait up to `wait_s` for this instance's own match session; if one starts: play it out (battle_self), then
+    answer the Rematch? (`answer`) or let its countdown run out. Records where this instance ends up."""
+    det = _own_det(ctx)
+    start = _size(det)
+    began = time.monotonic()
+    out = {'matched': False}
+    while time.monotonic() - began < wait_s:
+        ctx.check_stop()
+        if SESSION.search(_tail(det, start)):
+            out['matched'] = True
+            out['session_after_s'] = round(time.monotonic() - began, 1)
+            break
+        time.sleep(1.0)
+    if out['matched']:
+        out['battle'] = battle_self(ctx, tag)
+        if answer:
+            out['rematch'] = rematch_self(ctx, answer, tag)
+        else:
+            time.sleep(40.0)   # results, then the Rematch? countdown runs out
+    else:
+        time.sleep(5.0)
+    out['where'] = _where(ctx.runner, ctx.on)
+    out['frame'] = str(ctx.runner.shot(ctx.on, f'{tag}-played'))
+    return _save(ctx, f'{tag}-play-{ctx.on}', out)
+
+
 def settle(ctx, wait_s=20.0):
     """Wait, then a frame of both (where each is before the next row's steps)."""
     time.sleep(wait_s)
-    return {k: str(ctx.runner.shot(k, 'settle')) for k in ('a', 'b')}
+    return {k: str(ctx.runner.shot(k, 'settle')) for k in ctx.runner.instances}
 
 
 def noop(ctx, why=''):
@@ -571,7 +950,7 @@ def _vary_still(runner, on, tick):
 def battle(ctx, tag='m', cap_s=300, shot_every_s=20.0):
     """Both fighters act (no idle drop) until both detectors log sync_end. Returns the lines; fails on a desync."""
     runner = ctx.runner
-    logs = {k: runner.instances[k]['detector_log'] for k in ('a', 'b')}
+    logs = {k: runner.instances[k]['detector_log'] for k in ctx.runner.instances}
     starts = {k: max(0, _size(p) - 4096) for k, p in logs.items()}
     ended, tick = {}, 0
     began = time.monotonic()
@@ -618,14 +997,14 @@ def after_try(ctx, tag='m', wait_s=30.0):
         out['battle'] = battle(ctx, tag)
         out['decline'] = decline_to_css(ctx, wait_s)
     else:
-        out['frames'] = {k: str(ctx.runner.shot(k, f'{tag}-after-leave')) for k in ('a', 'b')}
+        out['frames'] = {k: str(ctx.runner.shot(k, f'{tag}-after-leave')) for k in ctx.runner.instances}
     return _save(ctx, f'{tag}-after', out)
 
 
 def decline_to_css(ctx, wait_s=30.0):
     """Neither answers 'Rematch?': both countdowns run out and both return to the character select. Frames."""
     time.sleep(wait_s)
-    return {k: str(ctx.runner.shot(k, 'after-decline')) for k in ('a', 'b')}
+    return {k: str(ctx.runner.shot(k, 'after-decline')) for k in ctx.runner.instances}
 
 
 def leave_css_to_quickplay(ctx, tries=4):

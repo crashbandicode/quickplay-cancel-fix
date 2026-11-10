@@ -19,7 +19,9 @@ POINTS = [
     {'target': 'main+0x23191bc', 'registers': ['x8', 'x9'],
      'captures': [{'expression': 'x20+0x174', 'type': 'u32'},
                   {'expression': 'x20+0x198', 'type': 'bytes', 'size': 8},
-                  {'expression': 'pc+0x2febf34', 'type': 'bytes', 'size': 8}]},
+                  {'expression': 'pc+0x2febf34', 'type': 'bytes', 'size': 8},
+                  # rematch-path diff: the context's words around the flags (+0x180..+0x1af)
+                  {'expression': 'x20+0x180', 'type': 'bytes', 'size': 48}]},
     {'target': 'main+0x23105bc', 'registers': ['x8']},
     {'target': 'main+0x37266d0', 'registers': ['x0', 'x30'],
      'captures': [{'expression': 'x1+8', 'type': 'c-string', 'size': 64},
@@ -29,7 +31,10 @@ POINTS = [
     # [[0x52c4c58]+8]+0x88, read pc-relative).
     {'target': 'main+0x18514bc', 'registers': ['x8', 'x9'],
      'captures': [{'expression': 'x20+0xf4', 'type': 'u32'},
-                  {'expression': '[[[pc+0x3a7379c]+8]+0x88]+0x26a34', 'type': 'u32'}]},
+                  {'expression': '[[[pc+0x3a7379c]+8]+0x88]+0x26a34', 'type': 'u32'},
+                  # rematch-path diff: the context +0xe0..+0x13f, and the service's mode words +0x70..+0x7f
+                  {'expression': 'x20+0xe0', 'type': 'bytes', 'size': 96},
+                  {'expression': '[[[pc+0x3a7379c]+8]+0x88]+0x70', 'type': 'bytes', 'size': 16}]},
     # PracticeScene message 0xce99fc8cd: "match received" (+0xf4 = 3).
     {'target': 'main+0x185129c',
      'captures': [{'expression': '[[[pc+0x3a739bc]+8]+0x88]+0x26a34', 'type': 'u32'}]},
@@ -92,6 +97,21 @@ POINTS = [
     {'target': 'main+0x168db60', 'registers': ['x1', 'x30'], 'backtrace': True, 'rate_limit': 20},
     # 0x1566650's host branch (this station is the session host): sampled to tell host from joiner.
     {'target': 'main+0x1566758', 'rate_limit': 1, 'captures': [{'expression': 'x19+0x180', 'type': 'u32'}]},
+    # Rematch-path diff (primary 21:36Z): PracticeScene's menu gate (vtable slot 15, x0 = the scene): who asks
+    # whether the waiting menu may open, and the context it reads.
+    # It is polled every frame by the scene framework (.17f30dc, yrm01), so it doubles as a 4 Hz sampler of the
+    # state the Leave Battle tab could depend on: PracticeScene's context, the service's round/room words
+    # (+0x26a30.., which .169edd0(svc, 1) resets on a rematch), its flags +0x223c0 and members 0/1 (state +0x210e0).
+    {'target': 'main+0x18512c0', 'registers': ['x0', 'x30'], 'backtrace': True, 'rate_limit': 4,
+     'captures': [{'expression': '[x0+0x58]+0xe0', 'type': 'bytes', 'size': 64},
+                  {'expression': '[x0+0x58]+0x120', 'type': 'bytes', 'size': 16},
+                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x70', 'type': 'bytes', 'size': 16},
+                  {'expression': '[x0+0x58]+0x130', 'type': 'bytes', 'size': 208},
+                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x26a30', 'type': 'bytes', 'size': 160},
+                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x223c0', 'type': 'bytes', 'size': 8},
+                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x210c0', 'type': 'bytes', 'size': 48},
+                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x212a0', 'type': 'bytes', 'size': 48},
+                  {'expression': '[[[pc+0x3a72998]+8]+0x88]+0x9ff0', 'type': 'bytes', 'size': 16}]},
 ]
 
 
@@ -121,6 +141,7 @@ def main():
                    help='<file>@<profile-relative path>: copied into both instances\' profiles (pinned)')
     p.add_argument('--host-base', help='JSON with top-level keys to override (host, hostname, runner, ...)')
     p.add_argument('--authorization', required=True)
+    p.add_argument('--only', help='a or b: a one-instance config (the pair split across hosts, one instance per PC)')
     args = p.parse_args()
     src = json.loads(Path(args.source).read_text())
     nros = dict(item.split('=', 1) for item in args.nro)
@@ -139,6 +160,8 @@ def main():
     cfg['instances'] = []
     for i, item in enumerate(src['instances'][:2]):
         key = item['key']
+        if args.only and key != args.only:
+            continue
         inst = {k: v for k, v in item.items() if k not in ('plugins', 'files', 'trace', 'sources')}
         inst.update(instance_base)
         inst['display'] = ':' + displays[i]
