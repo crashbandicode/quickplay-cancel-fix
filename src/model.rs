@@ -24,7 +24,7 @@
 //! slot. v0.2.0 left it raised, so after the first match this console
 //! counted its own slot 3 while the opponent counted it 2.
 
-use crate::chain;
+use crate::{chain, hold};
 
 pub const SUPPORTED_VERSION: &str = "13.0.5";
 
@@ -35,9 +35,19 @@ pub enum Kind {
     /// One of the plugin's inline hooks goes here: another plugin's hook on it
     /// is chained onto (`chain::entry`).
     Hooked,
-    /// Code the plugin relies on (it reads or writes the data this code
-    /// reads or writes): other plugins' hooks in it are fine.
+    /// A hooked site where code jumps into the words a far jump would
+    /// replace: only a one-word branch may go there, so another plugin's far
+    /// jump there leaves it alone too.
+    HookedNearOnly,
+    /// Code the plugin relies on or calls (it reads or writes the data this
+    /// code reads or writes): other plugins' hooks in it are fine.
     Relied,
+}
+
+impl Kind {
+    pub fn hooked(self) -> bool {
+        matches!(self, Self::Hooked | Self::HookedNearOnly)
+    }
 }
 
 /// A code site and the 64 bytes there in the 13.0.5 image.
@@ -60,6 +70,10 @@ impl Site {
         let stock = self.stock();
         match self.kind {
             Kind::Hooked => chain::entry(&stock, words, address) != chain::Entry::Foreign,
+            Kind::HookedNearOnly => !matches!(
+                chain::entry(&stock, words, address),
+                chain::Entry::Foreign | chain::Entry::Chain(_)
+            ),
             Kind::Relied => chain::usable(&stock, words, address, 0),
         }
     }
@@ -184,10 +198,22 @@ pub const MODE_READ: Site = Site {
 };
 
 /// Every site checked before anything is installed.
-pub const SITES: [&Site; 6] = [&WAIT, &GATE, &COUNT_RESET, &COUNT_BUMP, &STATION_OF, &MODE_READ];
+pub const SITES: [&Site; 11] = [
+    &WAIT,
+    &GATE,
+    &COUNT_RESET,
+    &COUNT_BUMP,
+    &STATION_OF,
+    &MODE_READ,
+    &hold::READY,
+    &hold::LEAVE,
+    &hold::SET_STATE,
+    &hold::INPUT_FREE,
+    &hold::MENU_GATE,
+];
 
 /// The main-image offsets this plugin hooks.
-pub const HOOKED_SITES: [usize; 2] = [WAIT_OFFSET, GATE_OFFSET];
+pub const HOOKED_SITES: [usize; 4] = [WAIT_OFFSET, GATE_OFFSET, hold::READY_OFFSET, hold::LEAVE_OFFSET];
 
 /// `*(*(*(base + SERVICE) + 8) + 0x88)` is the online service.
 pub const SERVICE: usize = 0x52c4c58;
@@ -402,7 +428,7 @@ mod tests {
 
     #[test]
     fn sites_are_checked_by_kind() {
-        let hooked: Vec<_> = SITES.iter().filter(|s| s.kind == Kind::Hooked).map(|s| s.offset).collect();
+        let hooked: Vec<_> = SITES.iter().filter(|s| s.kind.hooked()).map(|s| s.offset).collect();
         assert_eq!(hooked, HOOKED_SITES);
         for site in SITES {
             assert!(site.usable(&site.stock(), at(site)), "{}", site.name);
@@ -410,7 +436,7 @@ mod tests {
         // TrainingRooms fingerprints .236b470+0x104, .1851480+0x100, .18512c0+0x50 and .1851310+0x30: the hook
         // is outside them.
         for (start, len) in [(0x236b470, 0x104), (0x1851480, 0x100), (0x18512c0, 0x50), (0x1851310, 0x30)] {
-            for site in SITES.iter().filter(|s| s.kind == Kind::Hooked) {
+            for site in SITES.iter().filter(|s| s.kind.hooked()) {
                 assert!(site.offset + 64 <= start || site.offset >= start + len, "{}", site.name);
             }
         }

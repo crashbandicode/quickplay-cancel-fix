@@ -4,6 +4,7 @@
 //! The lobby entered from the character select takes the rematch lobby's
 //! battle count for this console's slot; the leave itself is the game's own.
 pub mod chain;
+pub mod hold;
 pub mod model;
 #[cfg(target_os = "switch")]
 mod runtime;

@@ -1,6 +1,6 @@
 [package]
 name = "quickplay-cancel-fix"
-version = "0.2.1"
+version = "0.3.0-dev"
 edition = "2021"
 publish = false
 description = "Skyline plugin for Super Smash Bros. Ultimate 13.0.5: the first Quickplay match after the character select can be left while the opponent loads, as after a rematch Yes"

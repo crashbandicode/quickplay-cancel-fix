@@ -7,12 +7,14 @@
 //! that a writer thread appends to `events.log`.
 
 use crate::chain::{self, hook::Outcome, Entry};
+use crate::hold::{self, Gate, Tick};
 use crate::model::{self, Kind, Line, Site};
 use core::fmt::Write as _;
 use skyline::hooks::{getRegionAddress, InlineCtx, Region};
 use skyline::nn;
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
+use core::cell::UnsafeCell;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const DATA_DIR: &str = "sd:/ultimate/quickplay-cancel-fix";
 const OPEN_WRITE_APPEND: i32 = 2 | 4;
@@ -105,6 +107,127 @@ unsafe fn slot_stations() -> [u8; model::SLOTS] {
 static RAISED: AtomicU64 = AtomicU64::new(NONE);
 const NONE: u64 = u64::MAX;
 
+/// The joiner's ready hold. Only the hooks touch it, all on the game's main
+/// thread; `BUSY` turns a re-entry (none is expected) into a no-op.
+struct Shared(UnsafeCell<Gate>);
+// SAFETY: accessed only inside `with_gate`, which `BUSY` makes exclusive.
+unsafe impl Sync for Shared {}
+static GATE: Shared = Shared(UnsafeCell::new(Gate::new(hold::DEFAULT_HOLD)));
+static BUSY: AtomicBool = AtomicBool::new(false);
+
+fn with_gate<R>(f: impl FnOnce(&mut Gate) -> R) -> Option<R> {
+    if BUSY
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        return None;
+    }
+    // SAFETY: `BUSY` is held.
+    let result = f(unsafe { &mut *GATE.0.get() });
+    BUSY.store(false, Ordering::Release);
+    Some(result)
+}
+
+unsafe fn game<F: Copy>(offset: usize) -> F {
+    let code = (base() as usize + offset) as *const ();
+    core::mem::transmute_copy(&code)
+}
+
+#[cfg(feature = "diag")]
+fn note(note: Option<hold::Note>, detail: u64) {
+    if let Some(note) = note {
+        diag::push(format_args!("diag {note:?} detail={detail:#x}"));
+    }
+}
+
+#[cfg(not(feature = "diag"))]
+fn note(_: Option<hold::Note>, _: u64) {}
+
+/// The waiting area's ready report (`hold::READY`): x0 = the service, w1 = the
+/// state. As the joiner of a Quickplay room, 6 is reported instead of 7.
+unsafe extern "C" fn ready_report(ctx: &mut InlineCtx) {
+    let state = ctx.registers[1].w();
+    if state != hold::READY_STATE {
+        return;
+    }
+    let svc = ctx.registers[0].x();
+    if svc == 0 {
+        return;
+    }
+    let role = hold::role(
+        read_u64(svc + model::SVC_MY_ID as u64),
+        read_u64(svc + hold::SVC_HOST_ID as u64),
+    );
+    let mode = read_u32(base() + model::MODE as u64);
+    if let Some((report, result)) = with_gate(|gate| gate.ready(state, role, mode)) {
+        if report != state {
+            ctx.registers[1].set_w(report);
+        }
+        note(result, u64::from(report));
+    }
+}
+
+/// While holding, a waiting-area frame (x19 = the PracticeScene context):
+/// counts it when the waiting menu could open (PracticeScene's own gate,
+/// `hold::MENU_GATE`) and ends the hold with the game's own setter.
+unsafe fn hold_frame(context: u64) {
+    if !with_gate(|gate| gate.holding()).unwrap_or(false) {
+        return;
+    }
+    let Some(svc) = service() else {
+        return;
+    };
+    let round_started = read_u32(svc + hold::SVC_ROUND_MASK as u64) != 0;
+    let input_free: extern "C" fn() -> u32 = game(hold::INPUT_FREE_OFFSET);
+    let input_free = context != 0
+        && input_free() & 1 != 0
+        && hold::practice_has_focus(
+            read_u64(context + hold::PRACTICE_FOCUS as u64),
+            read_u64(base() + hold::MENU_FOCUS as u64),
+        );
+    let Some((step, result)) = with_gate(|gate| gate.tick(round_started, input_free)) else {
+        return;
+    };
+    match step {
+        Tick::Release => {
+            let set_state: extern "C" fn(u64, u32) -> u32 = game(hold::SET_STATE_OFFSET);
+            let reported = set_state(svc, hold::READY_STATE) & 1;
+            note(result, u64::from(reported));
+        }
+        _ => note(result, 0),
+    }
+}
+
+/// PracticeScene's leave state on its first frame (`hold::LEAVE`): Leave
+/// Battle was confirmed, so a hold ends.
+unsafe extern "C" fn leave_confirmed(_: &mut InlineCtx) {
+    let result = with_gate(|gate| gate.leave()).flatten();
+    note(result, 0);
+}
+
+/// `config.ini` beside the log: the hold (`hold::hold_from_config`); the
+/// default when the file is absent.
+fn read_hold() -> u32 {
+    let mut text = [0u8; 512];
+    let mut file = path(format_args!("{DATA_DIR}/config.ini"));
+    let Some(name) = file.with_nul() else {
+        return hold::DEFAULT_HOLD;
+    };
+    let mut handle = nn::fs::FileHandle { handle: 0 };
+    let mut read = 0u64;
+    unsafe {
+        if nn::fs::OpenFile(&mut handle, name.as_ptr(), 1) != 0 {
+            return hold::DEFAULT_HOLD;
+        }
+        let ok = nn::fs::ReadFile1(&mut read, handle, 0, text.as_mut_ptr(), text.len() as u64) == 0;
+        nn::fs::CloseFile(handle);
+        if !ok {
+            return hold::DEFAULT_HOLD;
+        }
+    }
+    hold::hold_from_config(&text[..(read as usize).min(text.len())])
+}
+
 unsafe fn slot_counts() -> [u32; model::SLOTS] {
     core::array::from_fn(|slot| read_u32(base() + (model::SLOT_COUNT + slot * model::SLOT_STRIDE) as u64))
 }
@@ -124,6 +247,7 @@ unsafe extern "C" fn wait_frame(ctx: &mut InlineCtx) {
         return;
     }
     let context = ctx.registers[model::WAIT_CONTEXT_REGISTER].x();
+    hold_frame(context);
     let exiting = context != 0 && read_u8(context + model::PRACTICE_EXIT as u64) != 0;
     let own = match service() {
         Some(svc) => model::own_slot(&slot_stations(), own_station(svc)),
@@ -382,7 +506,7 @@ unsafe fn usable(site: &Site) -> bool {
 
 /// Another plugin's hook is on code this plugin relies on.
 unsafe fn other_hook(site: &Site) -> bool {
-    site.kind != Kind::Hooked && site_words(site).is_some_and(|(_, words)| words != site.stock())
+    !site.kind.hooked() && site_words(site).is_some_and(|(_, words)| words != site.stock())
 }
 
 /// Hooks `site`, on another plugin's hook there if it finds one.
@@ -393,7 +517,13 @@ unsafe fn hook(site: &Site, callback: unsafe extern "C" fn(&mut InlineCtx)) -> (
     if !site.usable(&before, address) {
         return (Entry::Foreign, Outcome::Skipped);
     }
-    chain::hook::inline(address, &site.stock(), callback)
+    let (entry, outcome) = chain::hook::inline(address, &site.stock(), callback);
+    if site.kind == Kind::HookedNearOnly && matches!(outcome, Outcome::Far) {
+        // Code jumps into the words a far jump replaced: put them back.
+        chain::hook::restore(address, &before);
+        return (entry, Outcome::Restored);
+    }
+    (entry, outcome)
 }
 
 fn version_is_supported() -> bool {
@@ -452,6 +582,23 @@ pub fn main() {
                 // The names are a separate hook: without it the tab and the counts still work.
                 let (entry, outcome) = unsafe { hook(&model::GATE, names_load) };
                 let _ = write!(report, " {}={}/{}", model::GATE.name, entry.name(), outcome.name());
+                // The hold needs all three: the frame that releases it (wait), the leave that drops it, and last
+                // the report it changes (ready, a one-word branch only), so it never starts without the others.
+                let limit = read_hold();
+                let mut hold_on = limit != 0;
+                for (site, callback) in [
+                    (&hold::LEAVE, leave_confirmed as unsafe extern "C" fn(&mut InlineCtx)),
+                    (&hold::READY, ready_report),
+                ] {
+                    if !hold_on {
+                        break;
+                    }
+                    let (entry, outcome) = unsafe { hook(site, callback) };
+                    let _ = write!(report, " {}={}/{}", site.name, entry.name(), outcome.name());
+                    hold_on = outcome.hooked();
+                }
+                with_gate(|gate| *gate = Gate::new(if hold_on { limit } else { 0 }));
+                let _ = write!(report, " hold_frames={}", if hold_on { limit } else { 0 });
                 "installed"
             } else {
                 "not_installed"
