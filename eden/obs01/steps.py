@@ -1663,6 +1663,28 @@ def _host_view(records, since_ns):
     return out[-120:]
 
 
+def _hold_area(ctx, tag, start, room_cap_s=150, expect_held=True):
+    """Wait for this instance's waiting-area ready report since `start` (held, or any with `expect_held` false; a
+    found match ends the wait too). Returns the number of waiting areas seen and when."""
+    runner, on = ctx.runner, ctx.on
+    path = _trace_path(ctx) or ''
+    out = {'areas': 0}
+    began = time.monotonic()
+    while time.monotonic() - began < room_cap_s:
+        ctx.check_stop()
+        reports = _member_reports(_trace_records(path, start))
+        line = _hold_timeline(reports)
+        out['areas'] = sum(1 for r in reports if r['caller'] == LOADING_CALLER and r['state'] == 6)
+        if 'report' in line and (line['held'] or not expect_held):
+            out['area_s'] = round(time.monotonic() - began, 1)
+            return out
+        if _match_in_trace(runner, on, start):
+            return out
+        time.sleep(0.2)
+    _save(ctx, f'{tag}-try-leave', dict(out, tag=tag, outcome='none'))
+    raise RuntimeError(f'{on}: no waiting-area ready report within {room_cap_s} s')
+
+
 def _hold_watch(ctx, tag, leave, start, pstart, room_cap_s=150, cap_s=90, expect_held=True):
     """This instance (the joiner) from its search to its match or its leave. From the waiting area's ready report,
     Plus until the waiting menu shows; a frame of both consoles about every second. With the Leave Battle tab: with
@@ -1674,23 +1696,8 @@ def _hold_watch(ctx, tag, leave, start, pstart, room_cap_s=150, cap_s=90, expect
     runner, on = ctx.runner, ctx.on
     peer = 'b' if on == 'a' else 'a'
     path, ppath = _trace_path(ctx) or '', _trace_path(ctx, peer) or ''
-    out = {'tag': tag, 'leave': leave, 'looks': [], 'areas': 0}
-    began = time.monotonic()
-    while time.monotonic() - began < room_cap_s:
-        ctx.check_stop()
-        reports = _member_reports(_trace_records(path, start))
-        line = _hold_timeline(reports)
-        out['areas'] = sum(1 for r in reports if r['caller'] == LOADING_CALLER and r['state'] == 6)
-        if 'report' in line and (line['held'] or not expect_held):
-            out['area_s'] = round(time.monotonic() - began, 1)
-            break
-        if _match_in_trace(runner, on, start):
-            break
-        time.sleep(0.2)
-    else:
-        out['outcome'] = 'none'
-        _save(ctx, f'{tag}-try-leave', out)
-        raise RuntimeError(f'{on}: no waiting-area ready report within {room_cap_s} s')
+    out = {'tag': tag, 'leave': leave, 'looks': []}
+    out.update(_hold_area(ctx, tag, start, room_cap_s, expect_held))
     began = time.monotonic()
     menu_seen = False
     opened = tick = 0       # menus seen (a leave row opens it again, up to 3 times, if the tab or the leave missed)
@@ -1788,6 +1795,40 @@ def hold_join(ctx, tag='h', leave=False, peer_waited_s=0, room_cap_s=150, cap_s=
     got = _hold_watch(ctx, tag, leave, start, pstart, room_cap_s, cap_s, expect_held)
     _save(ctx, f'{tag}-join-{ctx.on}', {'ready': ready, 'peer_waited_s': waited, 'watch': got})
     return got
+
+
+def hold_join_ready(ctx, tag='h', peer_waited_s=0, room_cap_s=150, expect_held=False):
+    """hold_join's first half, so a take can start at the waiting area: Ready, then wait for the waiting area's ready
+    report. The trace marks go to `{tag}-marks-<on>.json` for hold_join_watch."""
+    peer = 'b' if ctx.on == 'a' else 'a'
+    path, ppath = _trace_path(ctx) or '', _trace_path(ctx, peer) or ''
+    start, pstart = _size(path), _size(ppath)
+    ready = _ready(ctx, tag)
+    area = _hold_area(ctx, tag, start, room_cap_s, expect_held)
+    return _save(ctx, f'{tag}-marks-{ctx.on}', dict(area, start=start, pstart=pstart, ready=ready,
+                                                     expect_held=expect_held))
+
+
+def hold_join_watch(ctx, tag='h', leave=False, cap_s=90):
+    """hold_join's second half (after hold_join_ready): `_hold_watch` from the marks."""
+    found = sorted(Path(ctx.row_dir).parent.glob(f'*/{tag}-marks-{ctx.on}.json'))
+    marks = json.loads(found[-1].read_text())
+    return _hold_watch(ctx, tag, leave, marks['start'], marks['pstart'], 10, cap_s, marks['expect_held'])
+
+
+def battle_soft(ctx, tag='m'):
+    """The last match of a boot, which may follow a take's encode with idle fighters: play it (battle) if the `{tag}`
+    try matched, and record a failure instead of failing the row, so the end rows still run."""
+    outcome = _try_outcome(ctx, tag)
+    if outcome != 'matched':
+        return _save(ctx, f'{tag}-battle-skip', {'outcome': outcome})
+    try:
+        return battle(ctx, tag)
+    except RuntimeError as error:
+        time.sleep(20.0)
+        return _save(ctx, f'{tag}-battle-soft', {'error': str(error),
+                                                 'frames': {k: str(ctx.runner.shot(k, f'{tag}-after'))
+                                                            for k in ctx.runner.instances}})
 
 
 def hold_rematch(ctx, tag='hr', leave=False, cap_s=90):

@@ -77,10 +77,11 @@ new += [
         st('set_hold', 'a', seconds=3),
         st('reach_css_tile', 'a'), {'gate': 'css-tile', 'on': 'a'}, {'play': 'pick', 'on': 'a'},
         {'gate': 'ready-banner', 'on': 'a'},
-        gif('after-joiner-hold', 'a', 45, "README 'after' (0.3.0): console a (QCF 0.3.0, hold 3 s) readies from the "
-            "character select and joins b's room; during the hold Pause has Leave Battle; Yes, and back to the "
-            "character select (no match follows); raw take",
-            [st('hold_join', 'a', tag='h3l', leave=True)]),
+        st('hold_join_ready', 'a', tag='h3l', expect_held=True),
+        gif('after-joiner-hold', 'a', 40, "README 'after' (0.3.0): console a (QCF 0.3.0, hold 3 s) has joined b's room "
+            "from the character select; from its waiting area: during the hold Pause has Leave Battle; Yes, and the "
+            "load back to the character select (no match follows); raw take",
+            [st('hold_join_watch', 'a', tag='h3l', leave=True)]),
         st('expect_hold', 'a', tag='h3l', held=True, menu=True, tab=True, name=True, outcome='left'),
         st('where_are', 'a', tag='h3l-after', wait_s=6.0),
         st('ensure_searching', 'b', tag='h3l-bw')]},
@@ -101,12 +102,13 @@ new += [
     {'id': 'h0', 'start': 'b-searching', 'end': 'results', 'budget_min': 10, 'steps': [
         st('set_hold', 'a', seconds=0)] + fresh_b('h0') + [
         st('css_to_banner', 'a'),
-        gif('before-joiner-native', 'a', 18, "README 'before' (0.3.0): the same join with the hold off (0.2.1): a "
-            "readies and joins b's room, Pause as it comes; capped so the match that follows isn't left idle long "
+        st('hold_join_ready', 'a', tag='h0', expect_held=False),
+        gif('before-joiner-native', 'a', 18, "README 'before' (0.3.0): the same join with the hold off (0.2.1), from "
+            "a's waiting area: Pause as it comes until the match starts; capped so the match isn't left idle long "
             "during the encode; raw take",
-            [st('hold_join', 'a', tag='h0', leave=True, cap_s=45, expect_held=False)]),
+            [st('hold_join_watch', 'a', tag='h0', leave=True, cap_s=45)]),
         st('expect_hold', 'a', tag='h0', held=False, menu=None, tab=None),
-        st('battle_if_matched', 'a', tag='h0')]},
+        st('battle_soft', 'a', tag='h0')]},
     dict(by['z-a'], start='results'), by['z-b'],
     {'id': 'v-hold', 'start': 'css', 'end': 'css', 'budget_min': 1, 'steps': [st('hold_verdict', 'a')]},
 ]
