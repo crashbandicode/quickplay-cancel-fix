@@ -11,6 +11,13 @@ receipts, frames and logs stay with the run under its label.
   - Release NRO `0b12208d42aa2656290d95cca6906fb0ad173c2611e9793fda6058c5040a876d`.
   - Diagnostic NRO `bddd7930ffa2f546e4846d8c62916edc0ab914cb192cad8337ece7383348fc14` (`--features diag`).
   - 36,864 bytes each, built from `e5b154b`; `src/` is the same at the release tag.
+- **Extra plugin on a in `qcf-xrm06` and `qcf-xrm09`:** ssbu-cpu-pilot 0.2.2.
+  - NRO sha256 `ed8f308f695842a9e5f1728f829cfe8e325c0aa98dee79c875358ad435d7dfea`, as its v0.2.2 manifest gives it.
+  - `config.ini`: `p1=player`, `level=1`, `auto_rematch=on`, `auto_save_replay=off`. It installed with `auto_rematch=1`
+    and piloted nothing.
+  - It only answers the "Rematch?" prompt with Yes, as the game's own answer.
+  - Its only rematch setting is Off/On (Off presses nothing), so b's No was the harness's press.
+  - The same `config.ini` was copied to b's profile, where no pilot NRO loads it.
 - **Numbers** below come from `tools/verdict.py` over each run's logs (host tests in `tools/test_verdict.py`):
 
   ```text
