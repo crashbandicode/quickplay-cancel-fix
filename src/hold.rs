@@ -123,6 +123,10 @@ pub const FULL_ROOM_WAIT: u32 = 180;
 pub const DEFAULT_HOLD: u32 = 180;
 pub const MIN_HOLD: u32 = 30;
 pub const MAX_HOLD: u32 = 600;
+/// Frames in which the menu couldn't open (a fade, a pop-up, the leave
+/// dialog) after which a hold ends anyway, so the host never waits on it for
+/// more than the hold plus this.
+pub const MAX_PAUSED: u32 = 600;
 
 /// The menu gate's second half: the PracticeScene context's focus handle is
 /// the current one.
@@ -192,6 +196,7 @@ pub enum Note {
     NativeAsHost,
     NativeNoRoom,
     Released,
+    ReleasedPaused,
     DroppedLeave,
     DroppedRound,
     DroppedStale,
@@ -205,11 +210,18 @@ pub struct Gate {
     limit: u32,
     /// Frames held so far, while holding.
     held: Option<u32>,
+    /// Frames of this hold in which the menu couldn't open.
+    paused: u32,
 }
 
 impl Gate {
     pub const fn new(limit: u32) -> Self {
-        Self { limit, held: None }
+        Self { limit, held: None, paused: 0 }
+    }
+
+    /// The hold for the next waiting area (the config is read per match).
+    pub fn set_limit(&mut self, limit: u32) {
+        self.limit = limit;
     }
 
     pub fn holding(&self) -> bool {
@@ -231,6 +243,7 @@ impl Gate {
         match role {
             Role::Joiner => {
                 self.held = Some(0);
+                self.paused = 0;
                 (LOADING_STATE, Some(Note::HeldAsJoiner))
             }
             Role::Host => (state, stale.or(Some(Note::NativeAsHost))),
@@ -250,6 +263,11 @@ impl Gate {
             return (Tick::Idle, Some(Note::DroppedRound));
         }
         if !input_free {
+            self.paused += 1;
+            if self.paused >= MAX_PAUSED {
+                self.held = None;
+                return (Tick::Release, Some(Note::ReleasedPaused));
+            }
             return (Tick::Paused(held), None);
         }
         let held = held + 1;
@@ -414,7 +432,7 @@ mod tests {
         let mut gate = Gate::new(DEFAULT_HOLD);
         gate.ready(READY_STATE, Role::Joiner, QUICKPLAY);
         // The waiting area fading in behind the loading tip: nothing counts.
-        for _ in 0..1000 {
+        for _ in 0..300 {
             assert_eq!(gate.tick(false, false), (Tick::Paused(0), None));
         }
         for frame in 1..=100 {
@@ -425,6 +443,49 @@ mod tests {
             assert_eq!(gate.tick(false, true), (Tick::Holding(frame), None));
         }
         assert_eq!(gate.tick(false, true), (Tick::Release, Some(Note::Released)));
+    }
+
+    /// A menu that never becomes available (or a leave dialog left open) doesn't keep the host waiting: the hold
+    /// ends after `MAX_PAUSED` such frames, counted over the whole hold.
+    #[test]
+    fn the_host_never_waits_more_than_the_hold_and_the_pause_cap() {
+        let mut gate = Gate::new(MAX_HOLD);
+        gate.ready(READY_STATE, Role::Joiner, QUICKPLAY);
+        for _ in 1..MAX_PAUSED {
+            assert_eq!(gate.tick(false, false), (Tick::Paused(0), None));
+        }
+        assert_eq!(gate.tick(false, false), (Tick::Release, Some(Note::ReleasedPaused)));
+        assert!(!gate.holding());
+        // Mixed: the counted and paused frames together never pass the hold plus the cap.
+        let mut gate = Gate::new(MAX_HOLD);
+        gate.ready(READY_STATE, Role::Joiner, QUICKPLAY);
+        let mut frames = 0;
+        loop {
+            frames += 1;
+            if gate.tick(false, frames % 3 != 0).0 == Tick::Release {
+                break;
+            }
+        }
+        assert!(frames <= MAX_HOLD + MAX_PAUSED, "{frames}");
+        // The next hold starts with no paused frames.
+        gate.ready(READY_STATE, Role::Joiner, QUICKPLAY);
+        assert_eq!(gate.tick(false, false), (Tick::Paused(0), None));
+    }
+
+    #[test]
+    fn each_match_takes_the_hold_configured_then() {
+        let mut gate = Gate::new(DEFAULT_HOLD);
+        for limit in [hold_from_config(b"hold_seconds=6"), hold_from_config(b"hold_seconds=10"), MIN_HOLD] {
+            gate.set_limit(limit);
+            gate.ready(READY_STATE, Role::Joiner, QUICKPLAY);
+            let mut frames = 1;
+            while gate.tick(false, true).0 != Tick::Release {
+                frames += 1;
+            }
+            assert_eq!(frames, limit);
+        }
+        gate.set_limit(hold_from_config(b"hold_seconds=0"));
+        assert_eq!(gate.ready(READY_STATE, Role::Joiner, QUICKPLAY), (READY_STATE, None));
     }
 
     #[test]

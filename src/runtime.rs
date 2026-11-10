@@ -159,7 +159,14 @@ unsafe extern "C" fn ready_report(ctx: &mut InlineCtx) {
         read_u64(svc + hold::SVC_HOST_ID as u64),
     );
     let mode = read_u32(base() + model::MODE as u64);
-    if let Some((report, result)) = with_gate(|gate| gate.ready(state, role, mode)) {
+    // The hold is read from the config for each joined Quickplay match, so a change applies to the next one.
+    let limit = (role == hold::Role::Joiner && mode == model::QUICKPLAY).then(read_hold);
+    if let Some((report, result)) = with_gate(|gate| {
+        if let Some(limit) = limit {
+            gate.set_limit(limit);
+        }
+        gate.ready(state, role, mode)
+    }) {
         if report != state {
             ctx.registers[1].set_w(report);
         }
@@ -584,8 +591,9 @@ pub fn main() {
                 let _ = write!(report, " {}={}/{}", model::GATE.name, entry.name(), outcome.name());
                 // The hold needs all three: the frame that releases it (wait), the leave that drops it, and last
                 // the report it changes (ready, a one-word branch only), so it never starts without the others.
+                // The config is read again for each joined match; `hold_seconds=0` there turns the hold off.
                 let limit = read_hold();
-                let mut hold_on = limit != 0;
+                let mut hold_on = true;
                 for (site, callback) in [
                     (&hold::LEAVE, leave_confirmed as unsafe extern "C" fn(&mut InlineCtx)),
                     (&hold::READY, ready_report),
