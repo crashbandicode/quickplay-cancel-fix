@@ -102,6 +102,20 @@ unsafe fn slot_stations() -> [u8; model::SLOTS] {
     stations
 }
 
+/// The stations in the lobby's member table.
+unsafe fn member_stations() -> [u8; model::SLOTS] {
+    let mut stations = [model::NO_STATION; model::SLOTS];
+    for (slot, station) in stations.iter_mut().enumerate() {
+        *station = read_u8(base() + (model::MEMBER_TABLE + slot * model::MEMBER_STRIDE + model::MEMBER_STATION) as u64);
+    }
+    stations
+}
+
+/// This console's slot in its lobby (`model::own_slot_in`).
+unsafe fn own_slot(svc: u64) -> Option<usize> {
+    model::own_slot_in(&member_stations(), &slot_stations(), own_station(svc))
+}
+
 /// The slot whose count the plugin raised and has not put back (`NONE`: none).
 /// Only the waiting-area hook, on the game's main thread, touches it.
 static RAISED: AtomicU64 = AtomicU64::new(NONE);
@@ -257,7 +271,7 @@ unsafe extern "C" fn wait_frame(ctx: &mut InlineCtx) {
     hold_frame(context);
     let exiting = context != 0 && read_u8(context + model::PRACTICE_EXIT as u64) != 0;
     let own = match service() {
-        Some(svc) => model::own_slot(&slot_stations(), own_station(svc)),
+        Some(svc) => own_slot(svc),
         None => None,
     };
     let counts = slot_counts();
@@ -295,7 +309,7 @@ unsafe extern "C" fn names_load(ctx: &mut InlineCtx) {
         return;
     }
     let own = match service() {
-        Some(svc) => model::own_slot(&slot_stations(), own_station(svc)),
+        Some(svc) => own_slot(svc),
         None => None,
     };
     if model::shown(mode, slot, own, stored).is_some() {

@@ -197,14 +197,55 @@ pub const MODE_READ: Site = Site {
     ],
 };
 
+/// The member pass's own-slot test (`.1563ed4`): `adrp x0, 0x5308000; add x0,
+/// x0, #0x760; mov w1, w26; bl .179ed00` on the lobby's member table, before
+/// the count load at `GATE`. Fixes the table's address. The table knows a
+/// joiner's slot from the start of its waiting area, while the slot table at
+/// `SLOT_STATION` gets the joiner's station only after its ready report
+/// (qcf-shd1: 0x00 for the joiner's slot during the hold).
+pub const MEMBER_TEST: Site = Site {
+    name: "member_test",
+    offset: 0x1563ed4,
+    kind: Kind::Relied,
+    guard: [
+        0x20, 0xed, 0x01, 0xb0, 0x00, 0x80, 0x1d, 0x91, 0xe1, 0x03, 0x1a, 0x2a, 0x88, 0xeb, 0x08,
+        0x94, 0x20, 0x05, 0x00, 0x37, 0x5f, 0x1f, 0x00, 0xf1, 0x08, 0x01, 0x00, 0x54, 0x08, 0x16,
+        0x80, 0x52, 0x48, 0x5f, 0x08, 0x9b, 0x89, 0xc6, 0x9d, 0x52, 0x89, 0x00, 0xa0, 0x72, 0x08,
+        0x69, 0x69, 0xb8, 0x1f, 0x05, 0x00, 0x71, 0x08, 0x04, 0x00, 0x54, 0x08, 0xed, 0x01, 0xd0,
+        0x08, 0xf1, 0x40, 0xb9,
+    ],
+};
+/// `.179ed00(table, slot)` on a slot below 8: the slot's entry, 0x1c8 bytes
+/// per slot, whose `+0x10` it passes on (`mov w9, #0x1c8; madd; add x0, x8,
+/// #16`). Fixes the entry's size and the station byte's place in it.
+pub const MEMBER_ENTRY: Site = Site {
+    name: "member_entry",
+    offset: 0x179ed88,
+    kind: Kind::Relied,
+    guard: [
+        0x68, 0x1e, 0x00, 0x12, 0x1f, 0x21, 0x00, 0x71, 0x22, 0x09, 0x00, 0x54, 0x68, 0x1e, 0x40,
+        0x92, 0x09, 0x39, 0x80, 0x52, 0x08, 0x55, 0x09, 0x9b, 0xfd, 0x7b, 0x43, 0xa9, 0x00, 0x41,
+        0x00, 0x91, 0xf4, 0x4f, 0x42, 0xa9, 0xf6, 0x57, 0x41, 0xa9, 0xf7, 0x07, 0x44, 0xf8, 0x5f,
+        0xff, 0xff, 0x17, 0xe8, 0x03, 0x33, 0x2a, 0x1f, 0x1d, 0x00, 0x72, 0xa0, 0x06, 0x00, 0x54,
+        0xf5, 0x46, 0x40, 0xf9,
+    ],
+};
+/// The lobby's member table: per slot an entry of `MEMBER_STRIDE` bytes with
+/// the member's station at `MEMBER_STATION` (`NO_STATION`: nobody).
+pub const MEMBER_TABLE: usize = 0x5308760;
+pub const MEMBER_STRIDE: usize = 0x1c8;
+pub const MEMBER_STATION: usize = 0x10;
+
 /// Every site checked before anything is installed.
-pub const SITES: [&Site; 11] = [
+pub const SITES: [&Site; 13] = [
     &WAIT,
     &GATE,
     &COUNT_RESET,
     &COUNT_BUMP,
     &STATION_OF,
     &MODE_READ,
+    &MEMBER_TEST,
+    &MEMBER_ENTRY,
     &hold::READY,
     &hold::LEAVE,
     &hold::SET_STATE,
@@ -254,6 +295,13 @@ pub fn own_slot(stations: &[u8; SLOTS], mine: u8) -> Option<usize> {
         return None;
     }
     stations.iter().position(|s| *s == mine)
+}
+
+/// This console's slot in the lobby: from the member table (`MEMBER_TABLE`),
+/// which has it from the start of the waiting area, else from the slot
+/// table (`SLOT_STATION`, set for a joiner only after its ready report).
+pub fn own_slot_in(members: &[u8; SLOTS], slots: &[u8; SLOTS], mine: u8) -> Option<usize> {
+    own_slot(members, mine).or_else(|| own_slot(slots, mine))
 }
 
 /// The count to write into this console's slot of a Quickplay lobby, if any:
@@ -419,6 +467,45 @@ mod tests {
         assert_eq!(adrp_page(&MODE_READ, 0) + ldst_offset(MODE_READ.stock()[1]), MODE);
         let quickplay_low = 0u32.wrapping_sub(0xf8fe_feff);
         assert_eq!(quickplay_low, QUICKPLAY);
+        // member_test: adrp x0, 0x5308000; add x0, x0, #0x760; mov w1, w26; bl .179ed00; then the count load (GATE)
+        let test = MEMBER_TEST.stock();
+        assert_eq!(adrp_page(&MEMBER_TEST, 0) + ((test[1] >> 10) & 0xfff) as usize, MEMBER_TABLE);
+        assert_eq!(test[2], 0x2a1a_03e1, "mov w1, w26: the slot");
+        let imm = ((test[3] & 0x03ff_ffff) as i32) << 6 >> 4;
+        assert_eq!((MEMBER_TEST.offset as i64 + 12 + imm as i64) as usize, 0x179ed00);
+        assert_eq!(GATE_OFFSET - MEMBER_TEST.offset, 9 * 4);
+        assert_eq!(MEMBER_TEST.guard[36..64], GATE.guard[..28]);
+        // member_entry: cmp w8, #8; b.hs; mov w9, #0x1c8; madd x8, x8, x9, x21; ...; add x0, x8, #16
+        let entry = MEMBER_ENTRY.stock();
+        assert_eq!(entry[1], 0x7100_211f, "cmp w8, #8");
+        assert_eq!(SLOTS, 8);
+        assert_eq!(((entry[4] >> 5) & 0xffff) as usize, MEMBER_STRIDE);
+        assert_eq!(entry[5], 0x9b09_5508);
+        assert_eq!(((entry[7] >> 10) & 0xfff) as usize, MEMBER_STATION);
+    }
+
+    /// qcf-shd1 h3l, the joiner held at 6: the member table had both stations (slot 0 the host's 0, slot 1 this
+    /// console's 1), the slot table had 0 for both, so 0.3.0's first build raised nothing and the tab didn't show.
+    #[test]
+    fn the_own_slot_comes_from_the_member_table_first() {
+        let mut members = [NO_STATION; SLOTS];
+        let slots = [0u8; SLOTS];
+        assert_eq!(own_slot_in(&members, &slots, 1), None, "the joiner, before anything is known");
+        assert_eq!(own_slot_in(&members, &slots, 0), Some(0), "no members yet: the slot table, as 0.2.1");
+        members[0] = 0;
+        members[1] = 1;
+        assert_eq!(own_slot_in(&members, &slots, 1), Some(1), "the held joiner");
+        assert_eq!(own_slot_in(&members, &slots, 0), Some(0), "the host");
+        // After the joiner's ready report both tables agree.
+        let mut slots = [NO_STATION; SLOTS];
+        slots[0] = 0;
+        slots[1] = 1;
+        assert_eq!(own_slot_in(&members, &slots, 1), Some(1));
+        assert_eq!(own_slot_in(&members, &slots, NO_STATION), None);
+        // qcf-xfz7 m1 (a room switch): the member table follows the room; the joiner is slot 1 there.
+        let members = [0, 1, NO_STATION, NO_STATION, NO_STATION, NO_STATION, NO_STATION, NO_STATION];
+        let stale = [1, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(own_slot_in(&members, &stale, 1), Some(1));
     }
 
     /// Where each site would be with the image at a page-aligned base.
