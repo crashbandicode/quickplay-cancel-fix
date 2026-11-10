@@ -1828,14 +1828,33 @@ def hold_join_watch(ctx, tag='h', leave=False, cap_s=90):
     return _hold_watch(ctx, tag, leave, marks['start'], marks['pstart'], 10, cap_s, marks['expect_held'])
 
 
+def battle_out(ctx, tag='m', cap_s=300):
+    """The match just found, played out: `battle` from now on (back=0: qcf-xhd3 ry3's battle took the previous match's
+    sudden-death sync_end from the logs' tail, returned at once, and the idle rematch was disconnected for inactivity),
+    then the sudden death a time-out's tie starts about a second later (qcf-xhd3 h3), played to its end too."""
+    det = _own_det(ctx)
+    mark = _size(det)
+    out = {'match': battle(ctx, tag, cap_s, back=0)}
+    began = time.monotonic()
+    while time.monotonic() - began < 12.0:
+        ctx.check_stop()
+        text = _tail(det, mark)
+        ends = list(SYNC_END.finditer(text))
+        if ends and SESSION.search(text, ends[-1].end()):
+            out['sudden_death'] = battle(ctx, f'{tag}-sd', cap_s, back=0)
+            break
+        time.sleep(0.5)
+    return _save(ctx, f'{tag}-battle-out', out)
+
+
 def battle_soft(ctx, tag='m'):
-    """The last match of a boot, which may follow a take's encode with idle fighters: play it (battle) if the `{tag}`
-    try matched, and record a failure instead of failing the row, so the end rows still run."""
+    """The last match of a boot, which may follow a take's encode with idle fighters: play it (battle_out) if the
+    `{tag}` try matched, and record a failure instead of failing the row, so the end rows still run."""
     outcome = _try_outcome(ctx, tag)
     if outcome != 'matched':
         return _save(ctx, f'{tag}-battle-skip', {'outcome': outcome})
     try:
-        return battle(ctx, tag)
+        return battle_out(ctx, tag)
     except RuntimeError as error:
         time.sleep(20.0)
         return _save(ctx, f'{tag}-battle-soft', {'error': str(error),

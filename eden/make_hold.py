@@ -55,7 +55,7 @@ def held_match(tag, seconds, peer_waited_s=0, fresh=False, config=True):
               st('hold_join', 'a', tag=tag, leave=False, peer_waited_s=peer_waited_s),
               st('expect_hold', 'a', tag=tag, held=True, menu=True, tab=True, name=True, outcome='matched',
                  min_hold_s=round(seconds * 0.9, 2)),
-              st('battle', 'a', tag=tag)]
+              st('battle_out', 'a', tag=tag)]
     return {'id': tag, 'start': 'b-searching', 'end': 'results', 'budget_min': 10, 'steps': steps}
 
 
@@ -91,7 +91,7 @@ new += [
         st('hold_rematch', 'a', tag='ry3', leave=False),
         st('expect_hold', 'a', tag='ry3', held=True, menu=True, tab=True, name=True, outcome='matched',
            min_hold_s=2.7),
-        st('battle', 'a', tag='ry3')]},
+        st('battle_out', 'a', tag='ry3')]},
     rematch_leave('ry3l'),
     held_match('h6p', 6, peer_waited_s=45),
     rematch_leave('ry6l'),
