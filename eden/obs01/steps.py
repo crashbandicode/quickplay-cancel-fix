@@ -929,6 +929,48 @@ def battle_if_matched(ctx, tag='ry'):
     return battle(ctx, tag)
 
 
+def ready_peek_and_wait_session(ctx, tag='m', cap_s=150, peek_cap_s=60):
+    """Freeze A/B candidate arms (primary 17:59Z: "m1 from the CSS with Leave Battle shown"): Ready, then once this
+    console reported its own ready state (member 7 in its trace), Plus once: a frame of the waiting menu, whether the
+    Leave Battle tab is in it, then B to close it (no leave). Then wait for the match session as
+    ready_and_wait_session does."""
+    det = ctx.runner.instances[ctx.on]['detector_log']
+    start = _size(det)
+    trace = _trace_path(ctx) or ''
+    tstart = _size(trace)
+    ready = _ready(ctx, tag)
+    peek = {'seen_7': False}
+    began = time.monotonic()
+    while time.monotonic() - began < peek_cap_s:
+        ctx.check_stop()
+        if SESSION.search(_tail(det, start)):
+            peek['too_late'] = 'session started first'
+            break
+        states = _states(_trace_records(trace, tstart))
+        if any(s['kind'] == 'member_state' and (s['regs'] or {}).get('x1') == '0x7' for s in states):
+            peek['seen_7'] = round(time.monotonic() - began, 2)
+            time.sleep(0.3)
+            ctx.press('plus', 80)
+            time.sleep(0.6)
+            shot = ctx.shot(f'{tag}-peek')
+            peek.update(menu=_menu_shown(ctx, shot), tab=_tab_shown(ctx, shot), shot=str(shot))
+            if peek['menu'] or peek['tab']:
+                ctx.press('b', 80)
+                time.sleep(0.5)
+                peek['closed_shot'] = str(ctx.shot(f'{tag}-peek-closed'))
+            break
+        time.sleep(0.2)
+    _save(ctx, f'{tag}-peek-{ctx.on}', peek)
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        m = SESSION.search(_tail(det, start))
+        if m:
+            return _save(ctx, f'{tag}-session-{ctx.on}', {'seconds': round(time.monotonic() - began, 1),
+                                                         'line': m.group(0), 'ready': ready, 'peek': peek})
+        time.sleep(1.0)
+    raise RuntimeError(f'{ctx.on}: no match session within {cap_s} s of Ready (peek {peek})')
+
+
 GDB_PORT = 6543
 
 
@@ -944,15 +986,18 @@ def gdb_on(ctx, port=GDB_PORT):
     folder = _gdb_dir(ctx)
     folder.mkdir(parents=True, exist_ok=True)
     got = ctx.call('settings.set', {'key': 'core.use_gdbstub', 'value': True})
-    listen = ctx.call('settings.get', {'key': 'core.gdbstub_port'})
+    now = ctx.call('settings.get', {'key': 'core.use_gdbstub'}) or {}
+    listen = (ctx.call('settings.get', {'key': 'core.gdbstub_port'}) or {}).get('canonical')
     log = open(folder / 'hold.out', 'a')
     helper = Path(__file__).resolve().parent / 'gdbdump.py'
     proc = subprocess.Popen([sys.executable, '-B', str(helper), 'hold', str(port), str(folder), '900'],
                             stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
-    out = {'set': got, 'port': listen, 'helper_pid': proc.pid, 'folder': str(folder)}
+    out = {'set': got, 'now': now, 'port': listen, 'helper_pid': proc.pid, 'folder': str(folder)}
     _save(ctx, f'gdb-on-{ctx.on}', out)
-    if str((got or {}).get('value', got)).lower() not in ('true', '1'):
-        raise RuntimeError(f'core.use_gdbstub not on: {got}')
+    if str(now.get('canonical')).lower() != 'true':
+        raise RuntimeError(f'core.use_gdbstub not on: set {got}, now {now}')
+    if str(listen) != str(port):
+        raise RuntimeError(f'the GDB stub listens on {listen}, the helper on {port}')
     return {'helper_pid': proc.pid, 'port': listen}
 
 

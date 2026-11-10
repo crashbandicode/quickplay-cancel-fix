@@ -31,6 +31,12 @@ if gdb:
     load['steps'] = steps
     new[0] = load
     shutil.copy2(GDBDUMP, dst / 'gdbdump.py')
+    # The candidate arms show the tab: m1's Ready also peeks into the waiting menu once a reported 7.
+    m1 = dict(new[5])
+    m1['steps'] = [dict(s, run='steps.py:ready_peek_and_wait_session') if s.get('run') == 'steps.py:ready_and_wait_session'
+                   else s for s in m1['steps']]
+    assert any(s.get('run') == 'steps.py:ready_peek_and_wait_session' for s in m1['steps'])
+    new[5] = m1
 rows['rows'] = new
 rows['about'] = ("QCF freeze A/B (primary 17:35Z/17:59Z): qcf-srm12's m1 and ry1 (the first native rematch match "
                  "after a first match from the character select), played to the end; the arms differ only in a's "
