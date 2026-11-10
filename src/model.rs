@@ -1,24 +1,21 @@
-//! Host-testable half: the hook sites, the code they rely on, and the
-//! first-match hold.
+//! Host-testable half: the hook site, the code the plugin relies on, and the
+//! rematch count it gives a lobby entered from the character select.
 //!
-//! In an online room the host starts the battle round (`.16a1df0`) once every
-//! member reports state 7 and either the room countdown has run out (it then
-//! starts within a second, on the countdown's next 60-frame report) or the
-//! room has been full for 180 frames. Until the round starts either player can
-//! leave the waiting area (PracticeScene refuses only while the round's ack
-//! mask is set). A console that joins a room whose host has waited past its
-//! countdown reports 7 on the frame its waiting area starts (a small task run
-//! from PracticeScene: `.168db60(svc, 6)` then `.168db60(svc, 7)` at
-//! `.151b044`), and the round follows within a second: no leave. One that
-//! joins earlier gets the 180-frame full-room wait.
+//! In Quickplay the room keeps, per member slot, a count of the battles this
+//! console has played with it (`0x5313fb4 + slot * 0xb0`, the slot's station
+//! at `0x5313f08 + slot * 0xb0`). Entering the lobby from the character select
+//! resets every slot to 1 (IngameCallSequenceScene state 0, `.230d000`); each
+//! battle bumps the present slots (`.2314b00`, `.2315f40`); a member that
+//! leaves gets its slot reset to 1 (`.16af2e0`). Answering "Rematch?" Yes goes
+//! back to the lobby without that reset (state 5 to 3), so this console's own
+//! slot is 2 or more there, and a new opponent's loading can then be left the
+//! game's own way: Pause, Leave Battle, Yes. After a character-select entry
+//! the own slot is 1 and that loading cannot be left.
 //!
-//! For the first match of a Quickplay session (the character select's Ready
-//! that starts the service's matchmaking mode), and only when this console
-//! joins the room, the plugin reports 6 at `.151b044` instead and the game's
-//! own `.168db60(svc, 7)` after 180 frames in which the waiting menu can open:
-//! the full-room wait the host gives an earlier arrival. The host sees a
-//! joiner that is still loading. Leaving the waiting area drops the hold.
-//! Every later match is untouched.
+//! The plugin gives the own slot of a character-select lobby the count a
+//! rematch lobby has: 1 becomes 2, on the first waiting-area frame where this
+//! console's slot is known. Nothing else is written; a slot already at 2 or
+//! more (every rematch lobby) is left as it is, and so is every other slot.
 
 use crate::chain;
 
@@ -31,9 +28,9 @@ pub enum Kind {
     /// One of the plugin's inline hooks goes here: another plugin's hook on it
     /// is chained onto (`chain::entry`).
     Hooked,
-    /// Code the plugin calls: other plugins' hooks anywhere in it are fine to
-    /// run through.
-    Called,
+    /// Code the plugin relies on (it reads or writes the data this code
+    /// reads or writes): other plugins' hooks in it are fine.
+    Relied,
 }
 
 /// A code site and the 64 bytes there in the 13.0.5 image.
@@ -41,9 +38,6 @@ pub struct Site {
     pub name: &'static str,
     pub offset: usize,
     pub kind: Kind,
-    /// The hook may only be a one-word branch here: code jumps into the words
-    /// a far jump would replace.
-    pub near_only: bool,
     pub guard: [u8; 64],
 }
 
@@ -54,65 +48,15 @@ impl Site {
     }
 
     /// Whether the plugin can use this site as `words` (at `address`) hold
-    /// it: for a hooked site, whether its hook can go there.
+    /// it: for the hooked site, whether its hook can go there.
     pub fn usable(&self, words: &[u32; chain::WORDS], address: u64) -> bool {
         let stock = self.stock();
         match self.kind {
-            Kind::Hooked => match chain::entry(&stock, words, address) {
-                chain::Entry::Foreign => false,
-                // Another plugin's far jump already covers the words code jumps into.
-                chain::Entry::Chain(_) => !self.near_only,
-                _ => true,
-            },
-            Kind::Called => chain::usable(&stock, words, address, 0),
+            Kind::Hooked => chain::entry(&stock, words, address) != chain::Entry::Foreign,
+            Kind::Relied => chain::usable(&stock, words, address, 0),
         }
     }
 }
-
-/// The Quickplay sequence's search start (its state 5 handler `.23692b0`, on
-/// the state's first frame): `orr w1, wzr, #2` before `bl .16b4920(svc, 2)`,
-/// x8 = the online service. The service's mode (`+0x74`) is still 0 when the
-/// search starts a new Quickplay session from the character select; the call
-/// returns at once when the session is already in that mode. Nothing jumps
-/// into the 20 bytes from here. (TrainingRooms fingerprints the sequence's
-/// frame `.236b470` and PracticeScene's `.1851480`; neither is touched.)
-pub const SEARCH_OFFSET: usize = 0x2369304;
-pub const SEARCH: Site = Site {
-    name: "search",
-    offset: SEARCH_OFFSET,
-    kind: Kind::Hooked,
-    near_only: false,
-    guard: [
-        0xe1, 0x03, 0x1f, 0x32, 0xe0, 0x03, 0x08, 0xaa, 0x85, 0x2d, 0xcd, 0x97, 0x88, 0x2e, 0x46,
-        0xf9, 0x09, 0x21, 0x00, 0x91, 0x28, 0x01, 0x40, 0xf9, 0x08, 0x41, 0x40, 0xf9, 0x09, 0x11,
-        0x49, 0x39, 0x89, 0x00, 0x00, 0x34, 0x08, 0x19, 0x42, 0xb9, 0x1f, 0x25, 0x00, 0x71, 0xc1,
-        0x00, 0x00, 0x54, 0x60, 0x06, 0x40, 0xf9, 0xfd, 0x7b, 0x41, 0xa9, 0xe1, 0x03, 0x1f, 0x32,
-        0xf4, 0x4f, 0xc2, 0xa8,
-    ],
-};
-
-/// The waiting area's ready report: `bl .168db60` with x0 = the online
-/// service and w1 = 7, in the task (vtable `0x506d4d8`, slot 2 `.151af50`)
-/// PracticeScene runs on the frame its waiting battle starts. `.151b02c`
-/// jumps to `.151b04c`, inside the words a far jump would replace: near only.
-pub const READY_OFFSET: usize = 0x151b044;
-pub const READY: Site = Site {
-    name: "ready",
-    offset: READY_OFFSET,
-    kind: Kind::Hooked,
-    near_only: true,
-    guard: [
-        0xc7, 0xca, 0x05, 0x94, 0x00, 0x02, 0x00, 0x37, 0x68, 0xef, 0x01, 0xb0, 0x08, 0x69, 0x87,
-        0xb9, 0x1f, 0x05, 0x00, 0x71, 0x8b, 0x01, 0x00, 0x54, 0xe9, 0x03, 0x1f, 0xaa, 0xea, 0x0b,
-        0x00, 0x32, 0x6b, 0xef, 0x01, 0xb0, 0x6b, 0x71, 0x1e, 0x91, 0x3f, 0x21, 0x00, 0xf1, 0x22,
-        0x03, 0x00, 0x54, 0x29, 0x05, 0x00, 0x91, 0x6a, 0x01, 0x00, 0xb9, 0x6b, 0x21, 0x07, 0x91,
-        0x3f, 0x01, 0x08, 0xeb,
-    ],
-};
-
-// A far jump at the ready report would be 5 words (it is 4 past an 8-byte
-// boundary), over `.151b04c`.
-const _: () = assert!(READY.near_only && READY_OFFSET % 8 == 4);
 
 /// PracticeScene's running state (`.1851660`, every waiting-area frame), after
 /// its update call: `ldrb w8, [x19, #0xf0]` (its exit request), x19 = the
@@ -123,7 +67,6 @@ pub const WAIT: Site = Site {
     name: "wait",
     offset: WAIT_OFFSET,
     kind: Kind::Hooked,
-    near_only: false,
     guard: [
         0x68, 0xc2, 0x43, 0x39, 0x28, 0x01, 0x00, 0x34, 0x68, 0xfe, 0x81, 0xb9, 0x1f, 0x4d, 0x00,
         0x71, 0x22, 0x01, 0x00, 0x54, 0x68, 0x0a, 0x08, 0x8b, 0xe9, 0x03, 0x1f, 0x32, 0x09, 0xb1,
@@ -133,308 +76,123 @@ pub const WAIT: Site = Site {
     ],
 };
 
-/// PracticeScene's menu gate `(scene) -> bool` (`.18512c0`): `.17f3810()` and
-/// the context's `+0x128` equal to the global at `MENU_FOCUS`. The hold counts
-/// a frame only when this holds; the plugin evaluates it from the context (it
-/// has no scene pointer), so its 64 bytes are checked as code it relies on.
-pub const MENU_GATE_OFFSET: usize = 0x18512c0;
-pub const MENU_GATE: Site = Site {
-    name: "menu_gate",
-    offset: MENU_GATE_OFFSET,
-    kind: Kind::Called,
-    near_only: false,
+/// The character-select entry's reset (IngameCallSequenceScene state 0,
+/// `.230c160`): `adrp x9, 0x5313000; add x9, x9, #0xfb4; orr w10, wzr, #1`,
+/// then `str w10` at `+0`, `+0xb0`, ... `+0x4d0`: every slot's count to 1.
+/// Fixes the count table's address and stride.
+pub const COUNT_RESET: Site = Site {
+    name: "count_reset",
+    offset: 0x230d000,
+    kind: Kind::Relied,
     guard: [
-        0xf3, 0x0f, 0x1e, 0xf8, 0xfd, 0x7b, 0x01, 0xa9, 0xfd, 0x43, 0x00, 0x91, 0xf3, 0x03, 0x00,
-        0xaa, 0x50, 0x89, 0xfe, 0x97, 0x00, 0x01, 0x00, 0x36, 0x68, 0x2e, 0x40, 0xf9, 0x89, 0xd3,
-        0x01, 0xd0, 0x29, 0xc5, 0x43, 0xf9, 0x08, 0x95, 0x40, 0xf9, 0x1f, 0x01, 0x09, 0xeb, 0xe0,
-        0x17, 0x9f, 0x1a, 0x02, 0x00, 0x00, 0x14, 0xe0, 0x03, 0x1f, 0x2a, 0xfd, 0x7b, 0x41, 0xa9,
-        0xf3, 0x07, 0x42, 0xf8,
-    ],
-};
-/// The global the menu gate compares with the context's `+0x128`.
-pub const MENU_FOCUS: usize = 0x52c3788;
-pub const PRACTICE_FOCUS: usize = 0x128;
-
-/// The menu gate's second half: the PracticeScene context's focus handle is
-/// the current one.
-pub fn practice_has_focus(context_focus: u64, current: u64) -> bool {
-    context_focus != 0 && context_focus == current
-}
-
-/// PracticeScene's leave state (`.18518b0`, Leave Battle confirmed) on its
-/// first frame, where it reads the round's ack mask to leave (0) or go back to
-/// the waiting area. x19 = the PracticeScene context. Nothing jumps into the
-/// 16 bytes from here; no flags are live.
-pub const LEAVE_OFFSET: usize = 0x1851930;
-pub const LEAVE: Site = Site {
-    name: "leave",
-    offset: LEAVE_OFFSET,
-    kind: Kind::Hooked,
-    near_only: false,
-    guard: [
-        0x88, 0xd3, 0x01, 0xf0, 0x08, 0x2d, 0x46, 0xf9, 0x08, 0x05, 0x40, 0xf9, 0x08, 0x45, 0x40,
-        0xf9, 0x89, 0x46, 0x8d, 0x52, 0x49, 0x00, 0xa0, 0x72, 0x08, 0x69, 0x69, 0xb8, 0x48, 0x01,
-        0x00, 0x34, 0x68, 0xfe, 0x81, 0xb9, 0x1f, 0x4d, 0x00, 0x71, 0x42, 0x01, 0x00, 0x54, 0x68,
-        0x0a, 0x08, 0x8b, 0xe9, 0x03, 0x00, 0x32, 0x09, 0xb1, 0x01, 0xb9, 0xfd, 0x7b, 0x41, 0xa9,
-        0xf4, 0x4f, 0xc2, 0xa8,
+        0x29, 0x80, 0x01, 0xd0, 0x29, 0xd1, 0x3e, 0x91, 0xea, 0x03, 0x00, 0x32, 0x2a, 0x01, 0x00,
+        0xb9, 0x2a, 0xb1, 0x00, 0xb9, 0x2a, 0x61, 0x01, 0xb9, 0x2a, 0x11, 0x02, 0xb9, 0x2a, 0xc1,
+        0x02, 0xb9, 0x2a, 0x71, 0x03, 0xb9, 0x2a, 0x21, 0x04, 0xb9, 0x2a, 0xd1, 0x04, 0xb9, 0xa8,
+        0x00, 0x00, 0xb4, 0x00, 0x21, 0x16, 0x91, 0x08, 0xc5, 0x42, 0xf9, 0x08, 0x35, 0x40, 0xf9,
+        0x00, 0x01, 0x3f, 0xd6,
     ],
 };
 
-/// The member-state setter `(svc, state) -> bool` the ready report calls;
-/// the plugin calls it with 7 when the hold ends.
-pub const SET_STATE_OFFSET: usize = 0x168db60;
-pub const SET_STATE: Site = Site {
-    name: "set_state",
-    offset: SET_STATE_OFFSET,
-    kind: Kind::Called,
-    near_only: false,
+/// The bump after a battle (`.2314b00`): `ldrb w10, [0x5313f08]` (slot 0's
+/// station), its bit in the service's member mask, then `ldr w11, [0x5313fb4];
+/// add w11, w11, #1; str w11`. Fixes the station byte's place in the slot.
+pub const COUNT_BUMP: Site = Site {
+    name: "count_bump",
+    offset: 0x2315f40,
+    kind: Kind::Relied,
     guard: [
-        0xfc, 0x6f, 0xba, 0xa9, 0xfa, 0x67, 0x01, 0xa9, 0xf8, 0x5f, 0x02, 0xa9, 0xf6, 0x57, 0x03,
-        0xa9, 0xf4, 0x4f, 0x04, 0xa9, 0xfd, 0x7b, 0x05, 0xa9, 0xfd, 0x43, 0x01, 0x91, 0xff, 0x83,
-        0x08, 0xd1, 0x08, 0xff, 0x93, 0x52, 0x18, 0x00, 0x08, 0x8b, 0x08, 0x38, 0x8d, 0x52, 0x48,
-        0x00, 0xa0, 0x72, 0xbc, 0xe1, 0x01, 0xf0, 0x1b, 0x00, 0x08, 0x8b, 0x88, 0x2f, 0x46, 0xf9,
-        0x75, 0x03, 0x40, 0xb9,
+        0xea, 0x7f, 0x01, 0xd0, 0x4a, 0x21, 0x7c, 0x39, 0x09, 0x05, 0x40, 0xf9, 0x5f, 0xfd, 0x03,
+        0x71, 0x80, 0x01, 0x00, 0x54, 0x2b, 0x45, 0x40, 0xf9, 0x0c, 0x00, 0x94, 0x52, 0x6b, 0x69,
+        0x6c, 0xb8, 0xec, 0x03, 0x00, 0x32, 0x8a, 0x21, 0xca, 0x1a, 0x7f, 0x01, 0x0a, 0x6a, 0xa0,
+        0x00, 0x00, 0x54, 0xea, 0x7f, 0x01, 0xd0, 0x4b, 0xb5, 0x4f, 0xb9, 0x6b, 0x05, 0x00, 0x11,
+        0x4b, 0xb5, 0x0f, 0xb9,
     ],
 };
 
-/// `() -> bool`: no screen fade, pop-up or dialog is up (the first half of
-/// PracticeScene's menu gate `.18512c0`). The joiner's ready report comes while
-/// its waiting area is still loading behind the loading tip; the hold counts
-/// only frames where the whole gate holds, so the 180 frames are ones in which
-/// the waiting menu can open. Called, never hooked (TrainingRooms also relies
-/// on it).
-pub const INPUT_FREE_OFFSET: usize = 0x17f3810;
-pub const INPUT_FREE: Site = Site {
-    name: "input_free",
-    offset: INPUT_FREE_OFFSET,
-    kind: Kind::Called,
-    near_only: false,
+/// The station of a member ID (`.16f6340(svc + 0xa010, id)`): the index of
+/// the 16 station records (`+8`, stride 0x78) holding `id`. Fixes that layout,
+/// which the plugin reads for its own ID.
+pub const STATION_OF: Site = Site {
+    name: "station_of",
+    offset: 0x16f6340,
+    kind: Kind::Relied,
     guard: [
-        0xf3, 0x0f, 0x1e, 0xf8, 0xfd, 0x7b, 0x01, 0xa9, 0xfd, 0x43, 0x00, 0x91, 0xe8, 0xd9, 0x01,
-        0x90, 0x08, 0x11, 0x44, 0xf9, 0xa8, 0x00, 0x00, 0xb4, 0x08, 0x05, 0x40, 0xf9, 0x08, 0x89,
-        0x40, 0xf9, 0x00, 0x41, 0x40, 0xf9, 0x7f, 0xf1, 0x1b, 0x94, 0xe8, 0xd9, 0x01, 0x90, 0x08,
-        0x15, 0x44, 0xf9, 0xa8, 0x01, 0x00, 0xb4, 0x13, 0x05, 0x40, 0xf9, 0x68, 0x8a, 0x40, 0xf9,
-        0x00, 0x41, 0x40, 0xf9,
+        0x61, 0x02, 0x00, 0xb4, 0xe8, 0x03, 0x00, 0xaa, 0x09, 0x8d, 0x40, 0xf8, 0x3f, 0x01, 0x01,
+        0xeb, 0xe9, 0x03, 0x08, 0xaa, 0x60, 0x09, 0x00, 0x54, 0xe9, 0x03, 0x00, 0xaa, 0x2a, 0x0d,
+        0x48, 0xf8, 0x5f, 0x01, 0x01, 0xeb, 0xe0, 0x08, 0x00, 0x54, 0xe9, 0x03, 0x00, 0xaa, 0x2a,
+        0x8d, 0x4f, 0xf8, 0x5f, 0x01, 0x01, 0xeb, 0x60, 0x08, 0x00, 0x54, 0x09, 0xb8, 0x40, 0xf9,
+        0x3f, 0x01, 0x01, 0xeb,
+    ],
+};
+
+/// The waiting battle's member pass (`.15637a0`) reading the online-mode word
+/// (`adrp x8, 0x5305000; ldr w8, [x8, #0xf0]`) for its Quickplay modes.
+/// Fixes the mode word's address.
+pub const MODE_READ: Site = Site {
+    name: "mode_read",
+    offset: 0x1563f0c,
+    kind: Kind::Relied,
+    guard: [
+        0x08, 0xed, 0x01, 0xd0, 0x08, 0xf1, 0x40, 0xb9, 0xe9, 0xdf, 0x9f, 0x52, 0xc9, 0x1f, 0xbf,
+        0x72, 0x09, 0x01, 0x09, 0x0b, 0x3f, 0x09, 0x00, 0x71, 0x23, 0x01, 0x00, 0x54, 0x09, 0x00,
+        0x81, 0x52, 0x29, 0xe0, 0xa0, 0x72, 0x1f, 0x01, 0x09, 0x6b, 0xa0, 0x00, 0x00, 0x54, 0x09,
+        0x80, 0x80, 0x52, 0x29, 0xe0, 0xa0, 0x72, 0x1f, 0x01, 0x09, 0x6b, 0x21, 0x02, 0x00, 0x54,
+        0xe8, 0x0f, 0x40, 0xf9,
     ],
 };
 
 /// Every site checked before anything is installed.
-pub const SITES: [&Site; 7] = [&SEARCH, &READY, &WAIT, &LEAVE, &SET_STATE, &INPUT_FREE, &MENU_GATE];
+pub const SITES: [&Site; 5] = [&WAIT, &COUNT_RESET, &COUNT_BUMP, &STATION_OF, &MODE_READ];
 
 /// The main-image offsets this plugin hooks.
-pub const HOOKED_SITES: [usize; 4] = [SEARCH_OFFSET, READY_OFFSET, WAIT_OFFSET, LEAVE_OFFSET];
+pub const HOOKED_SITES: [usize; 1] = [WAIT_OFFSET];
 
-/// `*(*(*(base + SERVICE) + 8) + 0x88)` is the online service, as `.151b030`
-/// loads it for the ready report.
+/// `*(*(*(base + SERVICE) + 8) + 0x88)` is the online service.
 pub const SERVICE: usize = 0x52c4c58;
 pub const SERVICE_SLOT: usize = 0x88;
-/// Service fields: this console's member ID and the room host's (the wait
-/// loop compares their stations, `.1564bf4..1564c5c`), and the round's ack
-/// mask the wait loop reads at the hooked site.
+/// This console's member ID in the service, and the station records
+/// `.16f6340` searches (`svc + 0xa010`: IDs at `+8 + station * 0x78`).
 pub const SVC_MY_ID: usize = 0x9ff8;
-pub const SVC_HOST_ID: usize = 0x9ff0;
-pub const SVC_ROUND_MASK: usize = 0x26a34;
-/// The service's matchmaking mode: 0 until a search starts a session
-/// (`.16b4920` sets it), 2 for Quickplay.
-pub const SVC_MODE: usize = 0x74;
-/// The online-mode word (`[0x53050f0] & 0x7f000000 == 0x07000000`).
-pub const MODE: usize = 0x53050f0;
+pub const SVC_STATIONS: usize = 0xa018;
+pub const STATION_STRIDE: usize = 0x78;
+pub const STATIONS: usize = 16;
+pub const NO_STATION: u8 = 0xff;
 
-pub const READY_STATE: u32 = 7;
-pub const LOADING_STATE: u32 = 6;
+/// The online-mode word, and Quickplay's value in it.
+pub const MODE: usize = 0x5305000 + 0xf0;
+pub const QUICKPLAY: u32 = 0x0701_0101;
 
-/// The host's full-room wait: the round starts on the 180th full frame
-/// (`.1564fd8..1564fe8`: the counter read before its increment is above 178).
-pub const FULL_ROOM_WAIT: u32 = 180;
+/// The per-slot battle counts and stations.
+pub const SLOTS: usize = 8;
+pub const SLOT_STRIDE: usize = 0xb0;
+pub const SLOT_COUNT: usize = 0x5313000 + 0xfb4;
+pub const SLOT_STATION: usize = 0x5313000 + 0xf08;
+/// What the character-select entry resets a slot to, and what one battle
+/// (the rematch path) leaves on it.
+pub const FRESH_COUNT: u32 = 1;
+pub const REMATCH_COUNT: u32 = 2;
 
-/// Whether the mode word is an online mode.
-pub fn online(mode: u32) -> bool {
-    mode & 0x7f00_0000 == 0x0700_0000
+/// The station whose record holds `id` (`.16f6340`), or `NO_STATION`.
+pub fn station_of(records: &[u64; STATIONS], id: u64) -> u8 {
+    if id == 0 {
+        return NO_STATION;
+    }
+    records.iter().position(|r| *r == id).map_or(NO_STATION, |s| s as u8)
 }
 
-/// This console's place in the room.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Role {
-    NoRoom,
-    Host,
-    Joiner,
+/// The slot this console's station occupies.
+pub fn own_slot(stations: &[u8; SLOTS], mine: u8) -> Option<usize> {
+    if mine == NO_STATION {
+        return None;
+    }
+    stations.iter().position(|s| *s == mine)
 }
 
-/// From the service's member IDs: no room without an own ID; host when the
-/// room's host ID is this console's.
-pub fn role(my_id: u64, host_id: u64) -> Role {
-    if my_id == 0 {
-        Role::NoRoom
-    } else if host_id == my_id {
-        Role::Host
-    } else {
-        Role::Joiner
-    }
-}
-
-/// What a frame of the wait loop does with the hold.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Tick {
-    /// No hold.
-    Idle,
-    /// Holding; frames counted so far.
-    Holding(u32),
-    /// Holding, but this frame doesn't count (the waiting menu couldn't open).
-    Paused(u32),
-    /// The hold ends: report 7 now.
-    Release,
-}
-
-/// What happened to the first match's hold, for the diagnostic log.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Note {
-    Armed,
-    HeldAsJoiner,
-    NativeAsHost,
-    NativeNoRoom,
-    Released,
-    DroppedLeave,
-    DroppedRound,
-    DroppedStale,
-}
-
-/// The first-match hold, driven by the four hooks.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct Gate {
-    /// The next ready report is the first match's of this Quickplay session.
-    armed: bool,
-    /// Frames held so far, while holding.
-    held: Option<u32>,
-}
-
-impl Gate {
-    pub const fn new() -> Self {
-        Self {
-            armed: false,
-            held: None,
-        }
-    }
-
-    pub fn armed(&self) -> bool {
-        self.armed
-    }
-
-    pub fn holding(&self) -> bool {
-        self.held.is_some()
-    }
-
-    /// The Quickplay sequence starts a search from the character select; the
-    /// service's matchmaking mode is `mode` before the call. 0 = a new
-    /// Quickplay session: its first match is the one to hold.
-    pub fn search(&mut self, mode: u32) -> Option<Note> {
-        if mode != 0 {
-            return None;
-        }
-        self.armed = true;
-        self.held = None;
-        Some(Note::Armed)
-    }
-
-    /// The waiting area is about to report `state` with this console in
-    /// `role` of an online room (`online`). Returns the state to report and
-    /// what happened.
-    pub fn ready(&mut self, state: u32, role: Role, online: bool) -> (u32, Option<Note>) {
-        if state != READY_STATE {
-            return (state, None);
-        }
-        // A new waiting area: a hold from an earlier one (left some other way) ends.
-        let stale = self.held.take().map(|_| Note::DroppedStale);
-        if !self.armed || !online {
-            return (state, stale);
-        }
-        self.armed = false;
-        match role {
-            Role::Joiner => {
-                self.held = Some(0);
-                (LOADING_STATE, Some(Note::HeldAsJoiner))
-            }
-            Role::Host => (state, Some(Note::NativeAsHost)),
-            Role::NoRoom => (state, Some(Note::NativeNoRoom)),
-        }
-    }
-
-    /// A frame of the wait loop as the joiner; `round_started` = the ack mask
-    /// is set; `input_free` = the waiting menu could open this frame (no fade,
-    /// pop-up or dialog). Only such frames count.
-    pub fn tick(&mut self, round_started: bool, input_free: bool) -> (Tick, Option<Note>) {
-        let Some(held) = self.held else {
-            return (Tick::Idle, None);
-        };
-        if round_started {
-            self.held = None;
-            return (Tick::Idle, Some(Note::DroppedRound));
-        }
-        if !input_free {
-            return (Tick::Paused(held), None);
-        }
-        let held = held + 1;
-        if held >= FULL_ROOM_WAIT {
-            self.held = None;
-            return (Tick::Release, Some(Note::Released));
-        }
-        self.held = Some(held);
-        (Tick::Holding(held), None)
-    }
-
-    /// Leave Battle was confirmed in the waiting area: the hold (and an arm
-    /// not used yet) ends.
-    pub fn leave(&mut self) -> Option<Note> {
-        self.armed = false;
-        self.held.take().map(|_| Note::DroppedLeave)
-    }
-}
-
-/// What `.1564a30` does on a host frame once at least two members are in
-/// and every member reports 7.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Step {
-    /// Starts the battle round.
-    Start,
-    /// Counts one more full-room frame (and starts after 180).
-    Count,
-    /// Resets the full-room counter: the room is not full.
-    Reset,
-}
-
-/// `.1564f4c..1564fe8` as the game runs it on the host: the countdown's
-/// result (w20), the online-mode test and the full-room check, with the
-/// counter `frames`.
-pub fn host_step(countdown_out: bool, online: bool, room_full: bool, frames: u32) -> Step {
-    if countdown_out && online {
-        Step::Start
-    } else if !room_full {
-        Step::Reset
-    } else if frames + 1 >= FULL_ROOM_WAIT {
-        Step::Start
-    } else {
-        Step::Count
-    }
-}
-
-/// A vanilla host and a joiner in a full 1v1 room: frames from the joiner's
-/// waiting area starting (its ready report) to the host starting the round,
-/// with the host's countdown `out` or still running and `tick` = the frames
-/// to the countdown's next report (every 60 frames). `hold` = the joiner
-/// holds its 7 for that many frames first. This is the joiner's leave window.
-pub fn leave_window(countdown_out: bool, tick: u32, hold: u32) -> u32 {
-    let mut frames = 0;
-    for frame in 0.. {
-        if frame < hold {
-            continue; // the host waits for a member below 7: nothing counts
-        }
-        let reported = countdown_out && frame % 60 == tick % 60;
-        match host_step(reported, true, true, frames) {
-            Step::Start => return frame,
-            Step::Count => frames += 1,
-            Step::Reset => frames = 0,
-        }
-    }
-    unreachable!()
+/// The count to write into this console's slot of a Quickplay lobby, if any:
+/// a character-select entry's fresh 1 becomes the rematch path's 2; anything
+/// else (a rematch lobby's 2 or more, an unset 0) stays.
+pub fn adopt(mode: u32, count: u32) -> Option<u32> {
+    (mode == QUICKPLAY && count == FRESH_COUNT).then_some(REMATCH_COUNT)
 }
 
 /// A text line built in a fixed buffer; anything past `N` bytes is dropped.
@@ -497,41 +255,54 @@ mod tests {
     #[test]
     fn crate_is_quickplay_cancel_fix() {
         assert_eq!(env!("CARGO_PKG_NAME"), "quickplay-cancel-fix");
-        assert_eq!(env!("CARGO_PKG_VERSION"), "0.1.0");
     }
 
-    fn bl_target(site: &Site, i: usize) -> usize {
+    /// The page an `adrp` at `site.offset + 4 * i` loads.
+    fn adrp_page(site: &Site, i: usize) -> usize {
         let word = site.stock()[i];
-        assert_eq!(word >> 26, 0x25, "{} word {i} is not a bl", site.name);
-        let imm = ((word & 0x03ff_ffff) as i32) << 6 >> 4;
-        (site.offset as i64 + 4 * i as i64 + imm as i64) as usize
+        assert_eq!(word & 0x9f00_0000, 0x9000_0000, "{} word {i} is not an adrp", site.name);
+        let imm = (((word >> 5) & 0x7ffff) << 2 | (word >> 29) & 3) as i64;
+        let imm = if imm & (1 << 20) != 0 { imm - (1 << 21) } else { imm };
+        (((site.offset + 4 * i) as i64 & !0xfff) + (imm << 12)) as usize
+    }
+
+    /// The byte offset of an unsigned-immediate load or store.
+    fn ldst_offset(word: u32) -> usize {
+        (((word >> 10) & 0xfff) << (word >> 30)) as usize
     }
 
     #[test]
-    fn guards_start_with_the_expected_instructions() {
-        // orr w1, wzr, #2; mov x0, x8; bl .16b4920
-        assert_eq!(SEARCH.stock()[..2], [0x321f_03e1, 0xaa08_03e0]);
-        assert_eq!(bl_target(&SEARCH, 2), 0x16b4920);
-        // bl .168db60; tbnz w0, #0
-        assert_eq!(bl_target(&READY, 0), SET_STATE_OFFSET);
-        assert_eq!(READY.stock()[1], 0x3700_0200);
+    fn the_relied_on_code_fixes_the_addresses() {
         // ldrb w8, [x19, #0xf0]; cbz w8
         assert_eq!(WAIT.stock()[0], 0x3943_c268);
-        // adrp x8, 0x52c4000; ldr x8, [x8, #0xc58]; ...; mov w9, #0x6a34; movk w9, #2, lsl #16 (the ack mask)
-        assert_eq!(LEAVE.stock()[1], 0xf946_2d08);
-        assert_eq!(LEAVE.stock()[4..6], [0x528d_4689, 0x72a0_0049]);
-        assert_eq!(0x2_0000 | ((LEAVE.stock()[4] >> 5) & 0xffff) as usize, SVC_ROUND_MASK);
-        // bl .17f3810; ...; ldr x8, [x19, #0x58]; adrp x9; ldr x9, [x9, #0x788]; ldr x8, [x8, #0x128]
-        assert_eq!(bl_target(&MENU_GATE, 4), INPUT_FREE_OFFSET);
-        assert_eq!(MENU_GATE.stock()[6], 0xf940_2e68);
-        assert_eq!(MENU_GATE.stock()[8], 0xf943_c529);
-        assert_eq!(MENU_GATE.stock()[9], 0xf940_9508);
-        assert_eq!((MENU_GATE.stock()[8] >> 10 & 0xfff) as usize * 8, MENU_FOCUS & 0xfff);
-        assert_eq!((MENU_GATE.stock()[9] >> 10 & 0xfff) as usize * 8, PRACTICE_FOCUS);
-        // stp x28, x27, [sp, #-0x60]!
-        assert_eq!(SET_STATE.stock()[0], 0xa9ba_6ffc);
-        // str x19, [sp, #-0x20]!
-        assert_eq!(INPUT_FREE.stock()[0], 0xf81e_0ff3);
+        // count_reset: adrp x9; add x9, x9, #0xfb4; orr w10, wzr, #1; str w10, [x9, #slot * 0xb0] for 8 slots
+        let reset = COUNT_RESET.stock();
+        assert_eq!(adrp_page(&COUNT_RESET, 0) + ((reset[1] >> 10) & 0xfff) as usize, SLOT_COUNT);
+        assert_eq!(reset[2], 0x3200_03ea);
+        for slot in 0..SLOTS {
+            assert_eq!(reset[3 + slot] & 0xffc0_03ff, 0xb900_012a, "slot {slot}");
+            assert_eq!(ldst_offset(reset[3 + slot]), slot * SLOT_STRIDE, "slot {slot}");
+        }
+        assert_eq!(FRESH_COUNT, 1);
+        // count_bump: adrp x10; ldrb w10, [x10, #0xf08] ... adrp x10; ldr w11, [x10, #0xfb4]; add w11, w11, #1; str w11
+        let bump = COUNT_BUMP.stock();
+        assert_eq!(adrp_page(&COUNT_BUMP, 0) + ldst_offset(bump[1]), SLOT_STATION);
+        assert_eq!(bump[1] >> 22, 0x0e5, "ldrb");
+        assert_eq!(adrp_page(&COUNT_BUMP, 12) + ldst_offset(bump[13]), SLOT_COUNT);
+        assert_eq!(bump[14], 0x1100_056b);
+        assert_eq!(bump[15], 0xb90f_b54b);
+        assert_eq!(SLOT_COUNT - SLOT_STATION, 0xac);
+        // station_of: cbz x1; mov x8, x0; ldr x9, [x8, #8]!; ... ldr x10, [x9, #0x80]!; ... ldr x10, [x9, #0xf8]!
+        let station = STATION_OF.stock();
+        assert_eq!(station[2], 0xf840_8d09);
+        assert_eq!(station[7], 0xf848_0d2a);
+        assert_eq!(station[11], 0xf84f_8d2a);
+        assert_eq!(SVC_STATIONS - 0xa010, 8);
+        assert_eq!(0x80 - 8, STATION_STRIDE);
+        // mode_read: adrp x8, 0x5305000; ldr w8, [x8, #0xf0]; the Quickplay modes it compares with
+        assert_eq!(adrp_page(&MODE_READ, 0) + ldst_offset(MODE_READ.stock()[1]), MODE);
+        let quickplay_low = 0u32.wrapping_sub(0xf8fe_feff);
+        assert_eq!(quickplay_low, QUICKPLAY);
     }
 
     /// Where each site would be with the image at a page-aligned base.
@@ -543,20 +314,14 @@ mod tests {
     fn sites_are_checked_by_kind() {
         let hooked: Vec<_> = SITES.iter().filter(|s| s.kind == Kind::Hooked).map(|s| s.offset).collect();
         assert_eq!(hooked, HOOKED_SITES);
-        assert_eq!(SET_STATE.kind, Kind::Called);
         for site in SITES {
             assert!(site.usable(&site.stock(), at(site)), "{}", site.name);
         }
-        // TrainingRooms fingerprints .236b470+0x104, .1851480+0x100, .18512c0+0x50 and .1851310+0x30: no hook
-        // in them (the menu gate is only read).
+        // TrainingRooms fingerprints .236b470+0x104, .1851480+0x100, .18512c0+0x50 and .1851310+0x30: the hook
+        // is outside them.
         for (start, len) in [(0x236b470, 0x104), (0x1851480, 0x100), (0x18512c0, 0x50), (0x1851310, 0x30)] {
-            for site in SITES.iter().filter(|s| s.kind == Kind::Hooked) {
-                assert!(site.offset + 64 <= start || site.offset >= start + len, "{}", site.name);
-            }
+            assert!(WAIT_OFFSET + 64 <= start || WAIT_OFFSET >= start + len);
         }
-        assert!(practice_has_focus(0x1234, 0x1234));
-        assert!(!practice_has_focus(0x1234, 0x5678));
-        assert!(!practice_has_focus(0, 0));
     }
 
     #[test]
@@ -569,178 +334,43 @@ mod tests {
             words[3] ^= 0x10;
             assert!(!site.usable(&words, at(site)), "{}", site.name);
         }
-        // Another plugin's far jump over the ready report would cover .151b04c.
-        let mut words = READY.stock();
-        words[0] = chain::NOP;
-        words[1..3].copy_from_slice(&chain::FAR_JUMP);
-        words[3] = 0x4567_8000;
-        words[4] = 0x71;
-        assert!(!READY.usable(&words, at(&READY)));
     }
 
     #[test]
-    fn roles_come_from_the_member_ids() {
-        assert_eq!(role(0, 0), Role::NoRoom);
-        assert_eq!(role(0, 5), Role::NoRoom);
-        assert_eq!(role(5, 5), Role::Host);
-        assert_eq!(role(5, 9), Role::Joiner);
-        assert_eq!(role(5, 0), Role::Joiner);
-        assert!(online(0x0701_0800));
-        assert!(!online(0x0601_0800));
-    }
-
-    /// The character select's Ready starts a new Quickplay session.
-    fn new_session(gate: &mut Gate) {
-        assert_eq!(gate.search(0), Some(Note::Armed));
+    fn the_station_is_the_record_holding_the_id() {
+        let mut records = [0u64; STATIONS];
+        records[0] = 0xc100_710d_6166_8319;
+        records[3] = 0xc100_aaaa_bbbb_cccc;
+        assert_eq!(station_of(&records, 0xc100_710d_6166_8319), 0);
+        assert_eq!(station_of(&records, 0xc100_aaaa_bbbb_cccc), 3);
+        assert_eq!(station_of(&records, 0x1234), NO_STATION);
+        assert_eq!(station_of(&records, 0), NO_STATION, "no room: no own ID");
     }
 
     #[test]
-    fn arms_once_per_quickplay_entry() {
-        let mut gate = Gate::new();
-        assert!(!gate.armed());
-        // A search in a session already under way (mode 2): no arm.
-        assert_eq!(gate.search(2), None);
-        assert!(!gate.armed());
-        new_session(&mut gate);
-        assert!(gate.armed());
-        // The first ready report uses it, in either role.
-        assert_eq!(gate.ready(READY_STATE, Role::Host, true), (READY_STATE, Some(Note::NativeAsHost)));
-        assert!(!gate.armed());
-        // Later searches of the session: no new arm, nothing held.
-        assert_eq!(gate.search(2), None);
-        assert_eq!(gate.ready(READY_STATE, Role::Joiner, true), (READY_STATE, None));
-        // A new session from the character select arms again.
-        new_session(&mut gate);
-        assert!(gate.armed());
+    fn the_own_slot_holds_this_consoles_station() {
+        let stations = [0, 1, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        assert_eq!(own_slot(&stations, 0), Some(0));
+        assert_eq!(own_slot(&stations, 1), Some(1));
+        assert_eq!(own_slot(&stations, 2), None);
+        assert_eq!(own_slot(&stations, NO_STATION), None);
     }
 
+    /// The counts seen on Eden (qcf-xrm06): a character-select lobby has the
+    /// own slot at 1; the rematch lobbies at 2; a joiner's slot is 1 in both.
     #[test]
-    fn holds_only_as_the_joiner() {
-        for (role, reported, note, holding) in [
-            (Role::Joiner, LOADING_STATE, Note::HeldAsJoiner, true),
-            (Role::Host, READY_STATE, Note::NativeAsHost, false),
-            (Role::NoRoom, READY_STATE, Note::NativeNoRoom, false),
-        ] {
-            let mut gate = Gate::new();
-            new_session(&mut gate);
-            assert_eq!(gate.ready(READY_STATE, role, true), (reported, Some(note)), "{role:?}");
-            assert_eq!(gate.holding(), holding, "{role:?}");
-            assert!(!gate.armed(), "{role:?}");
+    fn a_character_select_lobby_takes_the_rematch_count() {
+        assert_eq!(adopt(QUICKPLAY, 1), Some(REMATCH_COUNT));
+        // A rematch lobby (one or more battles) and an unset slot stay as they are.
+        for count in [0, 2, 3, 7] {
+            assert_eq!(adopt(QUICKPLAY, count), None, "count {count}");
         }
-        // Offline, or a state other than 7: untouched and still armed.
-        let mut gate = Gate::new();
-        new_session(&mut gate);
-        assert_eq!(gate.ready(READY_STATE, Role::Joiner, false), (READY_STATE, None));
-        assert_eq!(gate.ready(LOADING_STATE, Role::Joiner, true), (LOADING_STATE, None));
-        assert!(gate.armed());
-    }
-
-    #[test]
-    fn releases_after_the_full_room_wait() {
-        let mut gate = Gate::new();
-        new_session(&mut gate);
-        gate.ready(READY_STATE, Role::Joiner, true);
-        for frame in 1..FULL_ROOM_WAIT {
-            assert_eq!(gate.tick(false, true), (Tick::Holding(frame), None));
+        // Other online modes and offline: untouched.
+        for mode in [0, 0x0701_0102, 0x0701_0400, 0x0701_0800, 0x0202_0000] {
+            assert_eq!(adopt(mode, 1), None, "mode {mode:#x}");
         }
-        assert_eq!(gate.tick(false, true), (Tick::Release, Some(Note::Released)));
-        assert_eq!(gate.tick(false, true), (Tick::Idle, None));
-        assert!(!gate.holding());
-    }
-
-    #[test]
-    fn only_frames_with_the_menu_available_count() {
-        let mut gate = Gate::new();
-        new_session(&mut gate);
-        gate.ready(READY_STATE, Role::Joiner, true);
-        // The waiting area fading in behind the loading tip: nothing counts.
-        for _ in 0..1000 {
-            assert_eq!(gate.tick(false, false), (Tick::Paused(0), None));
-        }
-        for frame in 1..=100 {
-            assert_eq!(gate.tick(false, true), (Tick::Holding(frame), None));
-        }
-        // The waiting menu open (a dialog is up): paused, then the rest counts.
-        assert_eq!(gate.tick(false, false), (Tick::Paused(100), None));
-        for frame in 101..FULL_ROOM_WAIT {
-            assert_eq!(gate.tick(false, true), (Tick::Holding(frame), None));
-        }
-        assert_eq!(gate.tick(false, true), (Tick::Release, Some(Note::Released)));
-        // A round started while paused still drops it.
-        let mut gate = Gate::new();
-        new_session(&mut gate);
-        gate.ready(READY_STATE, Role::Joiner, true);
-        assert_eq!(gate.tick(true, false), (Tick::Idle, Some(Note::DroppedRound)));
-    }
-
-    #[test]
-    fn a_leave_drops_the_hold() {
-        let mut gate = Gate::new();
-        new_session(&mut gate);
-        gate.ready(READY_STATE, Role::Joiner, true);
-        gate.tick(false, true);
-        assert_eq!(gate.leave(), Some(Note::DroppedLeave));
-        assert_eq!(gate.tick(false, true), (Tick::Idle, None));
-        // A round started anyway.
-        let mut gate = Gate::new();
-        new_session(&mut gate);
-        gate.ready(READY_STATE, Role::Joiner, true);
-        assert_eq!(gate.tick(true, true), (Tick::Idle, Some(Note::DroppedRound)));
-        // The waiting area ended some other way: the next ready report ends the stale hold.
-        let mut gate = Gate::new();
-        new_session(&mut gate);
-        gate.ready(READY_STATE, Role::Joiner, true);
-        assert_eq!(gate.ready(READY_STATE, Role::Joiner, true), (READY_STATE, Some(Note::DroppedStale)));
-        assert!(!gate.holding());
-        // A leave before the first ready report drops the arm too.
-        let mut gate = Gate::new();
-        new_session(&mut gate);
-        assert_eq!(gate.leave(), None);
-        assert!(!gate.armed());
-    }
-
-    #[test]
-    fn later_matches_are_native() {
-        let mut gate = Gate::new();
-        new_session(&mut gate);
-        gate.ready(READY_STATE, Role::Joiner, true);
-        while gate.tick(false, true).0 != Tick::Release {}
-        // Every later ready report in the session, whatever the role.
-        for role in [Role::Joiner, Role::Host, Role::Joiner] {
-            assert_eq!(gate.search(2), None);
-            assert_eq!(gate.ready(READY_STATE, role, true), (READY_STATE, None));
-            assert_eq!(gate.tick(false, true), (Tick::Idle, None));
-        }
-    }
-
-    #[test]
-    fn host_step_follows_the_game() {
-        assert_eq!(host_step(true, true, true, 0), Step::Start);
-        assert_eq!(host_step(true, false, true, 0), Step::Count);
-        assert_eq!(host_step(false, true, true, 178), Step::Count);
-        assert_eq!(host_step(false, true, true, 179), Step::Start);
-        assert_eq!(host_step(false, true, false, 179), Step::Reset);
-        // `cmp w8, #178` at .1564fe0 (the guard's neighbour .15669f8 has the same).
-        assert_eq!(FULL_ROOM_WAIT - 2, 178);
-    }
-
-    /// The parity table: the joiner's leave window against a vanilla host, on
-    /// every countdown phase. An early arrival (countdown running) gets the
-    /// full-room wait natively; a late one (countdown out) gets at most a
-    /// second natively and at least the full-room wait with the hold.
-    #[test]
-    fn the_first_match_waits_like_an_early_arrival() {
-        for tick in 0..60 {
-            let early = leave_window(false, tick, 0);
-            let late_native = leave_window(true, tick, 0);
-            let late_held = leave_window(true, tick, FULL_ROOM_WAIT);
-            assert_eq!(early, FULL_ROOM_WAIT - 1, "tick {tick}");
-            assert!(late_native < 60, "tick {tick}");
-            assert!(late_held >= early, "tick {tick}: {late_held} < {early}");
-            assert!(late_held < FULL_ROOM_WAIT + 60, "tick {tick}");
-        }
-        // The cost when the host's countdown is still running: its own wait follows the hold.
-        assert_eq!(leave_window(false, 0, FULL_ROOM_WAIT), 2 * FULL_ROOM_WAIT - 1);
+        // Writing it again on the next frame changes nothing.
+        assert_eq!(adopt(QUICKPLAY, REMATCH_COUNT), None);
     }
 
     #[test]
