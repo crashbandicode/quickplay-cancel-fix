@@ -9,8 +9,8 @@ leave during it, held matches played out, a rematch after a held match, and the 
         played to the end (no freeze after a held match).
   ry3l  Rematch Yes again; a takes Leave Battle during the rematch's hold; b keeps searching.
   h6p   hold 6 s, b past its countdown (45 s in its room); a joins, peeks; the match is played; ry6l as ry3l.
-  h10   hold 10 s, a fresh countdown; h10p hold 10 s, b past its countdown; each played, each followed by a rematch
-        leave (ry10l, ry10pl).
+  h10   hold 10 s, a fresh countdown; played, then a rematch leave (ry10l). (h10p, 10 s past the countdown, was cut to
+        fit the XPS slot: the primary's 21:42Z criteria ask for 6 s past and 10 s fresh.)
   h0    hold 0 (off, 0.2.1's behaviour): a joins; Plus as it comes (README "before" take, capped short because a match
         follows); the match is played.
 Every hold row records a's member reports (the held 6, the plugin's 7), b's countdown/ready/round records, frames of
@@ -97,8 +97,6 @@ new += [
     rematch_leave('ry6l'),
     held_match('h10', 10, fresh=True),
     rematch_leave('ry10l'),
-    held_match('h10p', 10, peer_waited_s=45, config=False),
-    rematch_leave('ry10pl'),
     {'id': 'h0', 'start': 'b-searching', 'end': 'results', 'budget_min': 10, 'steps': [
         st('set_hold', 'a', seconds=0)] + fresh_b('h0') + [
         st('css_to_banner', 'a'),

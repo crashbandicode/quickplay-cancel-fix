@@ -1699,6 +1699,12 @@ def _hold_watch(ctx, tag, leave, start, pstart, room_cap_s=150, cap_s=90, expect
     out = {'tag': tag, 'leave': leave, 'looks': []}
     out.update(_hold_area(ctx, tag, start, room_cap_s, expect_held))
     began = time.monotonic()
+    if leave:
+        # qcf-xhd2 h3l: Plus came 0.58 s after the held report and Yes 3.52 s after it, 0.24 s after the 3 s hold had
+        # ended. Plus as soon as the menu gate opens (0.27 s after the report there), then the fast leave.
+        time.sleep(0.35)
+        ctx.press('plus', 80)
+        time.sleep(0.7)
     menu_seen = False
     opened = tick = 0       # menus seen (a leave row opens it again, up to 3 times, if the tab or the leave missed)
     while time.monotonic() - began < cap_s:
@@ -1725,10 +1731,16 @@ def _hold_watch(ctx, tag, leave, start, pstart, room_cap_s=150, cap_s=90, expect
             if tab:
                 out.setdefault('tab_at_s', t)
             if leave and tab:
-                got = _explore_menu(ctx, tag, start, shot)      # closes the menu itself if the leave missed
+                got = _fast_leave(ctx, tag, start)
+                if not got['left']:
+                    time.sleep(1.5)     # the leave can land a little after the check (qcf-srm11 m2)
+                    got['left'] = _left_in_trace(ctx, start)
                 out['looks'].append(dict(got, t=round(time.monotonic() - began, 2), what='leave'))
                 if got['left']:
                     break
+                for _ in range(3):
+                    ctx.press('b', 80)
+                    time.sleep(0.4)
             elif not out.get('closed_after_tab'):
                 # Peek: B closes it once the tab was seen; without the tab, close it and open it again (up to 3).
                 ctx.press('b', 80)
