@@ -903,6 +903,78 @@ def pause_own_load(ctx, tag='oj', room_cap_s=150, cap_s=90, leave=True, every_s=
     return {'outcome': out['outcome'], 'looks': len(out['looks']), 'room_s': out.get('room_s')}
 
 
+def _try_outcome(ctx, tag):
+    found = sorted(Path(ctx.row_dir).parent.glob(f'*/{tag}-try-leave.json'))
+    return json.loads(found[-1].read_text()).get('outcome') if found else None
+
+
+def battle_if_matched(ctx, tag='ry'):
+    """Play the match a `{tag}` try ended in (both fighters act until both detectors end); nothing otherwise. With
+    the CPU pilot answering Rematch Yes on both, the next try row follows the results."""
+    outcome = _try_outcome(ctx, tag)
+    if outcome != 'matched':
+        return _save(ctx, f'{tag}-battle-skip', {'outcome': outcome})
+    return battle(ctx, tag)
+
+
+def rematch_tries(ctx, tag='ry', button='plus', cap_s=60, every_s=0.5, leave=True, skip_if_left=None):
+    """Primary 14:55Z, I2: after both consoles answered Rematch Yes, this instance (the opponent) presses `button`
+    at each phase of the re-entry: every time its own parent/child/PracticeScene/member state changes, press once,
+    and take frames on both consoles 0.6 s later. With Plus and the Leave Battle tab in the menu, `leave` takes the
+    game's own leave. Ends when this instance's match starts, it left, or `cap_s`. Records both consoles' states (the
+    member state reports with their callers) in `{tag}-rematch-tries.json`."""
+    runner, on = ctx.runner, ctx.on
+    if skip_if_left and _try_outcome(ctx, skip_if_left) != 'matched':
+        return _save(ctx, f'{tag}-rematch-skip', {'after': skip_if_left, 'outcome': _try_outcome(ctx, skip_if_left)})
+    peer = 'a' if on == 'b' else 'b'
+    path, ppath = _trace_path(ctx) or '', _trace_path(ctx, peer) or ''
+    start, pstart = _size(path), _size(ppath)
+    out = {'tag': tag, 'on': on, 'button': button, 'phases': []}
+    began, last = time.monotonic(), None
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        t = round(time.monotonic() - began, 2)
+        if _match_in_trace(runner, on, start):
+            out['phases'].append({'t': t, 'what': 'match-found (trace)'})
+            break
+        if _left_in_trace(ctx, start):
+            out['phases'].append({'t': t, 'what': 'left (trace)'})
+            break
+        now = _own_now(_states(_trace_records(path, start)))
+        key = (now['parent'], now['child'], now['practice'], now['member'])
+        if key != last:
+            last = key
+            entry = dict(now, t=t, peer=_own_now(_states(_trace_records(ppath, pstart))))
+            if button:
+                ctx.press(button, 80)
+                entry['pressed'] = button
+            time.sleep(0.6)
+            shot = ctx.shot(f'{tag}-{on}')
+            entry['menu'], entry['tab'] = _menu_shown(ctx, shot), _tab_shown(ctx, shot)
+            entry['shots'] = {on: str(shot), peer: str(runner.shot(peer, f'{tag}-{peer}'))}
+            out['phases'].append(entry)
+            if button == 'plus' and entry['tab'] and leave:
+                got = _fast_leave(ctx, tag, start)
+                out['phases'].append(dict(got, t=round(time.monotonic() - began, 2), what='leave'))
+                if got['left']:
+                    break
+            elif button == 'plus' and entry['menu']:
+                ctx.press('b', 80)        # close a menu without the tab, so the next phase starts unpaused
+        time.sleep(every_s)
+    time.sleep(3.0)
+    out['outcome'] = ('left' if _left_in_trace(ctx, start) else
+                      'matched' if _match_in_trace(runner, on, start) else 'none')
+    keep = ('child', 'parent', 'practice_state', 'practice_result', 'member_state', 'quit_request', 'practice_leave')
+    out['states'] = {on: [s for s in _states(_trace_records(path, start)) if s['kind'] in keep],
+                     peer: [s for s in _states(_trace_records(ppath, pstart)) if s['kind'] in keep]}
+    out['frames'] = {k: str(runner.shot(k, f'{tag}-end')) for k in ctx.runner.instances}
+    _save(ctx, f'{tag}-rematch-tries', out)
+    # pause_during_join's shape too, so after_soft plays a match that followed
+    _save(ctx, f'{tag}-try-leave', {'tag': tag, 'outcome': out['outcome'], 'looks': [
+        {'t': p.get('t'), 'menu': p.get('menu'), 'tab': p.get('tab'), 'what': p.get('what')} for p in out['phases']]})
+    return {'outcome': out['outcome'], 'phases': len(out['phases'])}
+
+
 # --- cross-host pair (primary 2026-11-10 00:05Z: one instance per PC, one driver per host) ---------------------------
 # The peer's state comes from its own trace on its host, read over ssh: only its parent/child state records (grep on
 # the remote side), so a 4 Hz sampler in the trace doesn't make every poll read megabytes.
