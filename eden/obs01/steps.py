@@ -9,6 +9,7 @@ Quickplay state machines (trace points in config.json) is copied into the row fo
 Route pieces come from rc6-bg-qp6 (worker B's XPS Quickplay rows): to_main (online_steps.py), reach_css_tile
 (xps_steps.py), the READY TO FIGHT look (qp.py ready_plus), _vary_still and keepalive (of_steps.py).
 """
+import copy
 import json
 import os
 import re
@@ -633,6 +634,39 @@ def where_are(ctx, tag='where', wait_s=0.0):
     time.sleep(wait_s)
     out = {k: dict(_where(ctx.runner, k), shot=str(ctx.runner.shot(k, tag))) for k in ctx.runner.instances}
     return _save(ctx, f'{tag}-where', out)
+
+
+def native_if_lobby(ctx, tag='m0', peer='b', join_cap_s=150, cap_s=80):
+    """If this instance is back in its lobby after a "Rematch?" Yes (the CPU pilot's auto rematch), the native case:
+    the peer readies from the character select and joins this reopened lobby, and this instance pauses during the
+    peer's load (pause_during_join: frames, Leave Battle taken if shown). Otherwise nothing (recorded)."""
+    where = _where(ctx.runner, ctx.on)
+    if not where['in_lobby']:
+        return _save(ctx, f'{tag}-native', {'where': where, 'skipped': 'not in a re-entered lobby'})
+    peer_ctx = copy.copy(ctx)
+    peer_ctx.on = peer
+    out = {'where': where, 'peer_ready': ready_until_searching(peer_ctx, tag=f'{tag}b')}
+    out['pause'] = pause_during_join(ctx, tag=tag, join_cap_s=join_cap_s, cap_s=cap_s, wait_p2=True)
+    if out['pause'].get('outcome') == 'matched':
+        out['after'] = after_soft(ctx, tag=tag)     # no cancel: the match is played out
+    out['where_after'] = {k: _where(ctx.runner, k) for k in ctx.runner.instances}
+    return _save(ctx, f'{tag}-native', out)
+
+
+def wait_where(ctx, tag='ww', in_lobby=True, cap_s=60.0):
+    """Wait until this instance's trace shows it back in its lobby (parent 8, child 3) or at the character select
+    (in_lobby False); e.g. after the CPU pilot plugin answered "Rematch?" Yes on its own. Fails at the cap."""
+    began = time.monotonic()
+    while True:
+        where = _where(ctx.runner, ctx.on)
+        if (where['in_lobby'] if in_lobby else where['at_css']) or time.monotonic() - began > cap_s:
+            break
+        time.sleep(1.0)
+    where.update(waited_s=round(time.monotonic() - began, 1), shot=str(ctx.runner.shot(ctx.on, f'{tag}-where')))
+    _save(ctx, f'{tag}-where-{ctx.on}', where)
+    if not (where['in_lobby'] if in_lobby else where['at_css']):
+        raise RuntimeError(f'{ctx.on} not {"in its lobby" if in_lobby else "at the CSS"} within {cap_s} s: {where}')
+    return where
 
 
 def play_out(ctx, tag='m', cap_s=240.0):
