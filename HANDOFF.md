@@ -1,6 +1,6 @@
 # Handoff: quickplay-cancel-fix
 
-Updated 2026-11-10 08:10Z (Get-Date).
+Updated 2026-11-10 08:40Z (Get-Date).
 
 - **Branch / commit:** `main`. 0.2.0 (`e5b154b`) is the shipped design: a Quickplay lobby entered from the character
   select takes the rematch lobby's battle count for this console's slot (1 to 2). Designs A and B are removed.
@@ -16,6 +16,10 @@ Updated 2026-11-10 08:10Z (Get-Date).
 - **Analysis:** `python3 tools/verdict.py --tries <run>/out --plugin a=… --detector a=… --detector b=…`.
 - **Rows:** generated from `eden/obs01` by `eden/make_rematch.py`, then the worker's `lan2c/make_after.py` /
   `make_later.py` (copies in `eden/`). The config comes from `eden/make_config.py` (`--nro` repeatable).
-- **Next:** the Forgejo release `v0.2.0` (NRO, manifest.json, SHA256SUMS.txt, GIFs). Install on the operator's card
-  only on the operator's order.
+- **Released:** `v0.2.0` (annotated, `669f5d9`), Forgejo release id 662
+  (https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.2.0).
+  - Assets: the NRO, manifest.json, SHA256SUMS.txt, before.gif and after.gif, each checked by an anonymous download.
+  - A fresh clone of the tag rebuilds the NRO byte-identical.
+  - Compliance: [docs/COMPLIANCE-v0.2.0.md](docs/COMPLIANCE-v0.2.0.md).
+- **Next:** ready for the card. Install it only on the operator's own order; it hasn't been tested on a Switch.
 - **No secrets** in this repo or its notes.
