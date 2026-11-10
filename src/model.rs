@@ -270,6 +270,12 @@ pub fn frame(
         return (None, write);
     }
     if let Some(slot) = raised {
+        if own.is_some_and(|own| own != slot) {
+            // This console is in another room now (its search joined another host's room after waiting in its own,
+            // qcf-xfz7 m1): the raised slot belongs to another member there. Put the native 1 back; the next frame
+            // raises the new own slot.
+            return (None, restore(counts[slot]).map(|count| (slot, count)));
+        }
         // Still raised: nothing to do, unless the game wrote the slot meanwhile.
         return (Some(slot).filter(|s| counts[*s] == REMATCH_COUNT), None);
     }
@@ -623,6 +629,36 @@ mod tests {
         let mut counts = [FRESH_COUNT; SLOTS];
         assert_eq!(visit(&mut counts, 1, 30), vec![(1, REMATCH_COUNT), (1, FRESH_COUNT)]);
         assert_eq!(counts, [FRESH_COUNT; SLOTS]);
+    }
+
+    /// qcf-xfz7 m1: the search first waited in this console's own room (own slot 0, raised), then joined b's room,
+    /// where slot 0 is b and this console is slot 1. The raise moves with it: b's slot gets its native 1 back, the
+    /// own slot is raised, so the leave is offered as the joiner too, and both consoles count the same after it.
+    #[test]
+    fn the_raise_follows_this_console_into_another_room() {
+        let mut counts = [FRESH_COUNT; SLOTS];
+        let (raised, write) = frame(None, QUICKPLAY, Some(0), &counts, false);
+        assert_eq!((raised, write), (Some(0), Some((0, REMATCH_COUNT))));
+        counts[0] = REMATCH_COUNT;
+        // Joined b's room: the own slot is 1 now, slot 0 (b's) still holds the plugin's 2.
+        let (raised, write) = frame(raised, QUICKPLAY, Some(1), &counts, false);
+        assert_eq!((raised, write), (None, Some((0, FRESH_COUNT))));
+        counts[0] = FRESH_COUNT;
+        let (raised, write) = frame(raised, QUICKPLAY, Some(1), &counts, false);
+        assert_eq!((raised, write), (Some(1), Some((1, REMATCH_COUNT))));
+        counts[1] = REMATCH_COUNT;
+        // The match: the own slot's 1 goes back, then the bump; both consoles count 2 for both slots.
+        let (raised, write) = frame(raised, QUICKPLAY, Some(1), &counts, true);
+        assert_eq!((raised, write), (None, Some((1, FRESH_COUNT))));
+        counts[1] = FRESH_COUNT;
+        for slot in [0, 1] {
+            counts[slot] += 1;
+        }
+        assert_eq!(counts[..2], [REMATCH_COUNT, REMATCH_COUNT]);
+        // No own slot known for a frame (the room being rebuilt): the raise stays as it is.
+        let mut counts = [FRESH_COUNT; SLOTS];
+        counts[0] = REMATCH_COUNT;
+        assert_eq!(frame(Some(0), QUICKPLAY, None, &counts, false), (Some(0), None));
     }
 
     #[test]
