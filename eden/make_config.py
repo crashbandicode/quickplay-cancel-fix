@@ -165,7 +165,7 @@ def main():
     p.add_argument('source')
     p.add_argument('out')
     p.add_argument('label')
-    p.add_argument('--nro', action='append', default=[], help='a=<path> or b=<path>: the QCF NRO for that instance')
+    p.add_argument('--nro', action='append', default=[], help='a=<path> or b=<path>: an extra NRO for that instance (repeatable)')
     p.add_argument('--displays', default='124,125')
     p.add_argument('--res', type=int, help='core.resolution_setup for both instances (XPS default is 1 = 0.5x)')
     p.add_argument('--inputs', default=str(INPUTS), help='folder with the detector and tile cursor NROs')
@@ -176,7 +176,10 @@ def main():
     p.add_argument('--only', help='a or b: a one-instance config (the pair split across hosts, one instance per PC)')
     args = p.parse_args()
     src = json.loads(Path(args.source).read_text())
-    nros = dict(item.split('=', 1) for item in args.nro)
+    nros = {}
+    for item in args.nro:
+        key, path = item.split('=', 1)
+        nros.setdefault(key, []).append(path)
     displays = args.displays.split(',')
     detector = Path(args.inputs) / 'libssbu_desync_detector.nro'
     tile = Path(args.inputs) / 'libssbu_tile_cursor.nro'
@@ -197,7 +200,7 @@ def main():
         inst = {k: v for k, v in item.items() if k not in ('plugins', 'files', 'trace', 'sources')}
         inst.update(instance_base)
         inst['display'] = ':' + displays[i]
-        inst['plugins'] = [pin(detector), pin(tile)] + ([pin(nros[key])] if key in nros else [])
+        inst['plugins'] = [pin(detector), pin(tile)] + [pin(path) for path in nros.get(key, [])]
         inst['files'] = [dict(o) for o in overlays]
         inst['sources'] = {'detector_log': 'user/sdmc/ultimate/ssbu-desync-detector/events.log',
                            'tile_log': 'user/sdmc/ultimate/ssbu-tile-cursor/events.log',
