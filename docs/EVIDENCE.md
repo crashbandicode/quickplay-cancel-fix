@@ -41,6 +41,8 @@ receipts, frames and logs stay with the run under its label.
   | m3, from the character select | 1 | 1 | hidden |
 
 - The plugin writes 2 into this console's own slot of a Quickplay lobby when it holds 1, and nothing else.
+- **Workarounds:** none. There is no guard, skip, restriction or tolerance beyond the 13.0.5 version and byte checks
+  at install.
 
 ## Runs
 
