@@ -1574,3 +1574,254 @@ def z_instance(ctx):
     if int((got or {}).get('total', -1)) != 0 or any(bad.values()):
         raise RuntimeError(f'{ctx.on}: {out}')
     return out
+
+
+# --- 0.3.0: the joiner's ready hold (primary 18:17Z/20:48Z) ---------------------------------------------------------
+
+# The waiting area's report pair (`.151af50`): 6 from here, then 7 from READY_CALLER; with the hold, the second report
+# is 6 too (through the plugin's hook, so its return address is the hook's) and the plugin reports 7 later.
+LOADING_CALLER = 'main+0x151afd0'
+READY_CALLER = 'main+0x151b048'
+
+
+def set_hold(ctx, seconds=3):
+    """This instance's quickplay-cancel-fix `config.ini`: `hold_seconds=<seconds>`. The plugin reads it at each joined
+    Quickplay match's ready report, so it applies from the next one."""
+    path = Path(ctx.instance['qcf_log']).parent / 'config.ini'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'hold_seconds={seconds}\n')
+    return _save(ctx, f'hold-config-{ctx.on}-{seconds}', {'path': str(path), 'text': path.read_text()})
+
+
+def _last_child_ns(path, state):
+    """Wall time (ns) of the latest IngameCallSequenceScene change to `state` in a trace, by a line scan (the whole
+    trace of a long boot is too big to parse as JSON every poll)."""
+    last = None
+    try:
+        with open(path, errors='replace') as f:
+            for line in f:
+                if '0x23191bc' in line and f'"x8":"{state}"' in line:
+                    last = line
+    except OSError:
+        return None
+    if not last:
+        return None
+    try:
+        return int(json.loads(last).get('wall_time_ns') or 0) or None
+    except ValueError:
+        return None
+
+
+def _member_reports(records):
+    """This instance's member-state reports (`.168db60` entries): wall time, state and the caller's location."""
+    out = []
+    for r in records:
+        if _kind(r) != 'member_state' or r.get('event') != 'entry':
+            continue
+        regs = r.get('registers') or {}
+        lr = regs.get('x30')
+        out.append({'ns': int(r.get('wall_time_ns') or 0), 'frame': r.get('frame'),
+                    'state': int(regs.get('x1') or '0x0', 16) & 0xff,
+                    'caller': (r.get('locations') or {}).get(lr, lr)})
+    return out
+
+
+def _hold_timeline(reports):
+    """From the reports since a step began: the waiting area's start (the 6 from LOADING_CALLER), its ready report
+    (the next one: 7 from READY_CALLER natively, 6 when held) and the plugin's 7 (a 7 from another caller) after it."""
+    out = {}
+    for i, r in enumerate(reports):
+        if r['caller'] == LOADING_CALLER and r['state'] == 6:
+            out = {'area_ns': r['ns']}
+            nxt = reports[i + 1] if i + 1 < len(reports) else None
+            if nxt:
+                out['report'] = {'state': nxt['state'], 'caller': nxt['caller'], 'ns': nxt['ns']}
+                out['held'] = nxt['state'] == 6 and nxt['caller'] != READY_CALLER
+            continue
+        if out.get('held') and r['state'] == 7 and r['caller'] != READY_CALLER:
+            out.setdefault('release', {'caller': r['caller'], 'ns': r['ns']})
+        if 'area_ns' in out and r['state'] == 8:
+            out.setdefault('round_ns', r['ns'])
+    if out.get('release'):
+        out['hold_s'] = round((out['release']['ns'] - out['report']['ns']) / 1e9, 2)
+    return out
+
+
+def _host_view(records, since_ns):
+    """The vanilla host's countdown reads, ready checks and round starts (rate-limited points), compact."""
+    out = []
+    for r in records:
+        kind = _kind(r)
+        ns = int(r.get('wall_time_ns') or 0)
+        if kind in ('countdown_read', 'host_ready_check', 'host_round_start', 'member_state', 'child', 'parent') \
+                and r.get('event') == 'entry' and ns >= since_ns:
+            regs = r.get('registers') or {}
+            caps = [c.get('value') if c.get('type') != 'bytes' else (c.get('hex') or '')[:24]
+                    for c in r.get('captures') or []]
+            out.append({'s': round((ns - since_ns) / 1e9, 2), 'kind': kind,
+                        'x1': regs.get('x1'), 'x8': regs.get('x8'), 'caps': caps[:3]})
+    return out[-120:]
+
+
+def _hold_watch(ctx, tag, leave, start, pstart, room_cap_s=150, cap_s=90, expect_held=True):
+    """This instance (the joiner) from its search to its match or its leave. From the waiting area's ready report,
+    Plus until the waiting menu shows; a frame of both consoles about every second. With the Leave Battle tab: with
+    `leave`, the game's own leave (_explore_menu: Up, A, Yes); else B closes the menu and the hold runs out.
+    `expect_held`: a waiting area whose report wasn't held (this console waited in its own room first, qcf-xfz7 m1) is
+    waited out without input until the search moves it into the peer's room.
+    Saves `{tag}-try-leave.json` (left / matched / none, the hold's timeline from this instance's member reports, the
+    host's countdown and round records, the looks) for expect_hold / battle_if_matched."""
+    runner, on = ctx.runner, ctx.on
+    peer = 'b' if on == 'a' else 'a'
+    path, ppath = _trace_path(ctx) or '', _trace_path(ctx, peer) or ''
+    out = {'tag': tag, 'leave': leave, 'looks': [], 'areas': 0}
+    began = time.monotonic()
+    while time.monotonic() - began < room_cap_s:
+        ctx.check_stop()
+        reports = _member_reports(_trace_records(path, start))
+        line = _hold_timeline(reports)
+        out['areas'] = sum(1 for r in reports if r['caller'] == LOADING_CALLER and r['state'] == 6)
+        if 'report' in line and (line['held'] or not expect_held):
+            out['area_s'] = round(time.monotonic() - began, 1)
+            break
+        if _match_in_trace(runner, on, start):
+            break
+        time.sleep(0.2)
+    else:
+        out['outcome'] = 'none'
+        _save(ctx, f'{tag}-try-leave', out)
+        raise RuntimeError(f'{on}: no waiting-area ready report within {room_cap_s} s')
+    began = time.monotonic()
+    menu_seen = False
+    opened = tick = 0       # menus seen (a leave row opens it again, up to 3 times, if the tab or the leave missed)
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        t = round(time.monotonic() - began, 2)
+        if _match_in_trace(runner, on, start):
+            out['looks'].append({'t': t, 'what': 'match-found (trace)'})
+            break
+        if _left_in_trace(ctx, start):
+            out['looks'].append({'t': t, 'what': 'left (trace)'})
+            break
+        now = _own_now(_states(_trace_records(path, start)))
+        shot = ctx.shot(f'{tag}-look')
+        menu, tab = _menu_shown(ctx, shot), _tab_shown(ctx, shot)
+        look = dict(now, t=t, menu=menu, tab=tab, shot=str(shot))
+        if tick % 2 == 0:
+            look['peer_shot'] = str(runner.shot(peer, f'{tag}-peer'))
+        out['looks'].append(look)
+        tick += 1
+        if menu or tab:
+            menu_seen = True
+            opened += 1
+            out.setdefault('menu_at_s', t)
+            if tab:
+                out.setdefault('tab_at_s', t)
+            if leave and tab:
+                got = _explore_menu(ctx, tag, start, shot)      # closes the menu itself if the leave missed
+                out['looks'].append(dict(got, t=round(time.monotonic() - began, 2), what='leave'))
+                if got['left']:
+                    break
+            elif leave or opened == 1:
+                ctx.press('b', 80)
+                time.sleep(0.4)
+                out.setdefault('closed_shot', str(ctx.shot(f'{tag}-closed')))
+        elif not menu_seen or (leave and opened < 3):
+            ctx.press('plus', 80)
+            time.sleep(0.9)     # the menu opens over about half a second (qcf-srm10 oj-1)
+            continue
+        time.sleep(0.6)
+    if _left_in_trace(ctx, start):
+        # What the host shows once this console has gone (the member's "Later!", then searching alone).
+        out['peer_after'] = []
+        for _ in range(8):
+            out['peer_after'].append(str(runner.shot(peer, f'{tag}-peer-after')))
+            time.sleep(0.5)
+    else:
+        time.sleep(3.0)
+    reports = _member_reports(_trace_records(path, start))
+    line = _hold_timeline(reports)
+    out['timeline'] = line
+    out['reports'] = [dict(r, s=round((r['ns'] - line.get('area_ns', r['ns'])) / 1e9, 2)) for r in reports][-12:]
+    out['host'] = _host_view(_trace_records(ppath, pstart), line.get('area_ns', 0) - int(5e9))
+    out['outcome'] = ('left' if _left_in_trace(ctx, start) else
+                      'matched' if _match_in_trace(runner, on, start) else 'none')
+    out['menu_seen'] = menu_seen
+    out['frames'] = {k: str(runner.shot(k, f'{tag}-end')) for k in ctx.runner.instances}
+    _save(ctx, f'{tag}-try-leave', out)
+    return {'outcome': out['outcome'], 'held': line.get('held'), 'hold_s': line.get('hold_s'),
+            'menu_at_s': out.get('menu_at_s'), 'tab_at_s': out.get('tab_at_s')}
+
+
+def hold_join(ctx, tag='h', leave=False, peer_waited_s=0, room_cap_s=150, cap_s=90, expect_held=True):
+    """0.3.0, this instance joins the peer's room from the character select (READY TO FIGHT up; the peer searching in
+    its own room). `peer_waited_s`: first wait until the peer has been in its waiting area that long (its countdown
+    run out). Then Ready and `_hold_watch`."""
+    peer = 'b' if ctx.on == 'a' else 'a'
+    path, ppath = _trace_path(ctx) or '', _trace_path(ctx, peer) or ''
+    waited = None
+    if peer_waited_s:
+        entry = _last_child_ns(ppath, '0x3')
+        if not entry:
+            raise RuntimeError(f'{peer}: no waiting area (child 3) in its trace')
+        left = peer_waited_s - (time.time_ns() - entry) / 1e9
+        if left > 0:
+            time.sleep(left)
+        ctx.check_stop()
+        waited = round((time.time_ns() - entry) / 1e9, 1)
+    start, pstart = _size(path), _size(ppath)
+    ready = _ready(ctx, tag)
+    got = _hold_watch(ctx, tag, leave, start, pstart, room_cap_s, cap_s, expect_held)
+    _save(ctx, f'{tag}-join-{ctx.on}', {'ready': ready, 'peer_waited_s': waited, 'watch': got})
+    return got
+
+
+def hold_rematch(ctx, tag='hr', leave=False, cap_s=90):
+    """0.3.0, after this instance's Rematch Yes (wait_answered just before): the re-entry into the same room, where
+    it is the joiner again, then `_hold_watch`."""
+    peer = 'b' if ctx.on == 'a' else 'a'
+    path, ppath = _trace_path(ctx) or '', _trace_path(ctx, peer) or ''
+    # wait_answered returns on the answer itself; the re-entry's waiting area starts seconds later.
+    start, pstart = _size(path), max(0, _size(ppath) - 262144)
+    return _hold_watch(ctx, tag, leave, start, pstart, 120, cap_s)
+
+
+def expect_hold(ctx, tag='h', held=True, menu=True, tab=True, outcome=None, min_hold_s=None, strict=False):
+    """What the `{tag}` watch saw against what the row is for: the ready report held (or not), the menu and its tab
+    during the wait, the outcome, and a hold at least `min_hold_s` long. Recorded in `{tag}-expect-<on>.json`; with
+    `strict` a mismatch fails the row here, else hold_verdict fails the boot's last row, so one mismatch doesn't stop
+    the rows after it."""
+    found = sorted(Path(ctx.row_dir).parent.glob(f'*/{tag}-try-leave.json'))
+    data = json.loads(found[-1].read_text()) if found else {}
+    line = data.get('timeline') or {}
+    got = {'held': bool(line.get('held')), 'menu': bool(data.get('menu_at_s') is not None),
+           'tab': bool(data.get('tab_at_s') is not None), 'outcome': data.get('outcome'),
+           'hold_s': line.get('hold_s')}
+    bad = []
+    if got['held'] != held:
+        bad.append('held')
+    if menu is not None and got['menu'] != menu:
+        bad.append('menu')
+    if tab is not None and got['tab'] != tab:
+        bad.append('tab')
+    if outcome and got['outcome'] != outcome:
+        bad.append('outcome')
+    if min_hold_s and outcome != 'left' and (got['hold_s'] or 0) < min_hold_s:
+        bad.append('hold_s')
+    _save(ctx, f'{tag}-expect-{ctx.on}', dict(got, bad=bad))
+    if bad and strict:
+        raise RuntimeError(f'{ctx.on}: {tag} {bad}: {got}')
+    return got
+
+
+def hold_verdict(ctx):
+    """The boot's hold rows together: every `*-expect-<on>.json` and its mismatches; fails if any."""
+    out = {}
+    for path in sorted(Path(ctx.row_dir).parent.glob(f'*/*-expect-{ctx.on}.json')):
+        data = json.loads(path.read_text())
+        out[path.name[:-len(f'-expect-{ctx.on}.json')]] = data
+    _save(ctx, f'hold-verdict-{ctx.on}', out)
+    bad = {k: v['bad'] for k, v in out.items() if v.get('bad')}
+    if not out or bad:
+        raise RuntimeError(f'{ctx.on}: hold rows with mismatches: {bad or "none recorded"}')
+    return {k: (v['held'], v['outcome'], v['hold_s'], v['tab']) for k, v in out.items()}
