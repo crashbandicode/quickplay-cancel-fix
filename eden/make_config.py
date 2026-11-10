@@ -144,6 +144,12 @@ POINTS = [
      'captures': [{'expression': 'pc+0x3ab3a90', 'type': 'bytes', 'size': 8},
                   {'expression': 'pc+0x3ac2950', 'type': 'bytes', 'size': 0x170},
                   {'expression': 'pc+0x3ab7100', 'type': 'bytes', 'size': 0x3d0}]},
+    # The joiner test (primary 13:46Z): PracticeScene's menu gate verdict (.18512c0 returns at .18512f8 with w0 = 1
+    # when the scene's own check .17f3810 passes and [context+0x128] equals the global [0x52c3788]), with both sides of
+    # that compare, at 8 Hz: is the waiting menu allowed while this console loads into someone's room?
+    {'target': 'main+0x18512f8', 'registers': ['x0'], 'rate_limit': 8,
+     'captures': [{'expression': '[x19+0x58]+0x128', 'type': 'u64'},
+                  {'expression': 'pc+0x3a72490', 'type': 'u64'}]},
 ]
 
 

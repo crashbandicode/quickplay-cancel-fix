@@ -35,7 +35,8 @@ POINTS = {'main+0x236b4ac': 'parent', 'main+0x23191bc': 'child', 'main+0x23105bc
           'main+0x16a21e8': 'mask_notready', 'main+0x168b500': 'mask_reset', 'main+0x16b2d6c': 'mask_store_b2d6c',
           'main+0x169eadc': 'mask_store_9eadc', 'main+0x1892048': 'mask_store_92048', 'main+0x1685cb0': 'send',
           'main+0x1685ac0': 'send_to', 'main+0x1566af4': 'host_round_start', 'main+0x15669c4': 'host_ready_check',
-          'main+0x1564088': 'countdown_read'}
+          'main+0x1564088': 'countdown_read', 'main+0x168db60': 'member_state',
+          'main+0x18512f8': 'menu_gate_verdict'}
 
 
 def _size(path):
@@ -802,6 +803,104 @@ def pause_during_join(ctx, tag='pj', join_cap_s=90, cap_s=90, leave=True, peer_h
     out['frames'] = {k: str(runner.shot(k, f'{tag}-end')) for k in ctx.runner.instances}
     _save(ctx, f'{tag}-try-leave', out)
     return {'outcome': out['outcome'], 'looks': len(out['looks']), 'peer_in_room_s': out.get('peer_in_room_s')}
+
+
+def _own_now(records):
+    """This instance's latest parent, child, PracticeScene state, reported member state (.168db60 x1) and waiting
+    menu gate verdict (.18512f8 w0) in `records` (the _states rows)."""
+    def last(kind, key='x8'):
+        return next((s['regs'].get(key) if key == 'x1' or key == 'x0' else s[key]
+                     for s in reversed(records) if s['kind'] == kind), None)
+    return {'parent': last('parent'), 'child': last('child'), 'practice': last('practice_state'),
+            'member': last('member_state', 'x1'), 'gate': last('menu_gate_verdict', 'x0')}
+
+
+def _fast_leave(ctx, tag, start):
+    """Leave Battle is in the open menu: Up, A, then Right, A on "Would you like to leave the game?" (it opens on No:
+    every dialog so far), with no frame in between; frames after. qcf-srm10 oj-2: the joiner's tab came about 3.5 s
+    before the host's "Get Ready", which closed the dialog of the slower leave with a frame and a focus check."""
+    t0 = time.time()
+    ctx.press('up', 70)
+    time.sleep(0.2)
+    ctx.press('a', 70)
+    time.sleep(0.6)
+    ctx.press('right', 70)
+    time.sleep(0.15)
+    ctx.press('a', 70)
+    out = {'tab': True, 'fast': True, 'yes_pressed_s': round(time.time() - t0, 2), 'yes_pressed_at': time.time()}
+    time.sleep(0.3)
+    out['confirm'] = str(ctx.shot(f'{tag}-x-confirmed'))
+    time.sleep(1.5)
+    out['confirm2'] = str(ctx.shot(f'{tag}-x-confirmed2'))
+    out['left'] = _left_in_trace(ctx, start)
+    return out
+
+
+def pause_own_load(ctx, tag='oj', room_cap_s=150, cap_s=90, leave=True, every_s=0.35):
+    """This instance JOINS a room (primary 13:46Z, the operator's joiner question): from its own entry into the room
+    (parent 8) until its match starts or it left, press Plus and look every `every_s`: is a menu open, is "Leave
+    Battle" there? Each look records this instance's own parent/child/PracticeScene state, the member state it
+    reported (6 loading, 7 ready) and the waiting menu gate's verdict. With `leave` and the tab: the game's own leave
+    (_explore_menu). A menu without the tab stays open and is looked at again. Saves `{tag}-try-leave.json` (outcome
+    left / matched / none; the looks in pause_during_join's shape) for after_soft."""
+    runner, on = ctx.runner, ctx.on
+    peer = 'a' if on == 'b' else 'b'
+    path, ppath = _trace_path(ctx) or '', _trace_path(ctx, peer) or ''
+    start, pstart = _size(path), _size(ppath)
+    out = {'tag': tag, 'peer': peer, 'role': 'joiner', 'looks': []}
+    began = time.monotonic()
+    while time.monotonic() - began < room_cap_s:
+        ctx.check_stop()
+        now = _own_now(_states(_trace_records(path, start)))
+        if now['parent'] == '0x8':
+            out['room_s'] = round(time.monotonic() - began, 1)
+            break
+        time.sleep(0.2)
+    else:
+        out['outcome'] = 'none'
+        _save(ctx, f'{tag}-try-leave', out)
+        raise RuntimeError(f'{on} did not enter a room within {room_cap_s} s')
+    began = time.monotonic()
+    menu_since = None
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        t = round(time.monotonic() - began, 2)
+        if _match_in_trace(runner, on, start):
+            out['looks'].append({'t': t, 'what': 'match-found (trace)'})
+            break
+        if _left_in_trace(ctx, start):
+            out['looks'].append({'t': t, 'what': 'left (trace)'})
+            break
+        now = _own_now(_states(_trace_records(path, start)))
+        shot = ctx.shot(f'{tag}-look')
+        menu, tab = _menu_shown(ctx, shot), _tab_shown(ctx, shot)
+        out['looks'].append(dict(now, t=t, menu=menu, tab=tab, pressed=not (menu or tab), shot=str(shot)))
+        if menu or tab:
+            menu_since = menu_since if menu_since is not None else t
+            if tab and leave:
+                got = _fast_leave(ctx, tag, start)
+                out['looks'].append(dict(got, t=round(time.monotonic() - began, 2), what='leave'))
+                if got['left']:
+                    break
+        else:
+            menu_since = None
+            ctx.press('plus', 80)
+            # The menu opens over about half a second: a look and a second Plus before then closes it again
+            # (qcf-srm10 oj-1 pressed every 0.55 s through an open gate and never saw it).
+            time.sleep(0.9)
+            continue
+        time.sleep(every_s)
+    time.sleep(3.0)
+    out['outcome'] = ('left' if _left_in_trace(ctx, start) else
+                      'matched' if _match_in_trace(runner, on, start) else 'none')
+    keep = ('child', 'parent', 'practice_state', 'practice_result', 'member_state', 'quit_request', 'practice_leave')
+    out['states'] = [s for s in _states(_trace_records(path, start)) if s['kind'] in keep]
+    out['gate'] = [(s['frame'], s['regs'].get('x0')) for s in _states(_trace_records(path, start))
+                   if s['kind'] == 'menu_gate_verdict']
+    out['peer_states'] = [s for s in _peer_list(ppath, pstart) if s['kind'] in ('child', 'parent')]
+    out['frames'] = {k: str(runner.shot(k, f'{tag}-end')) for k in ctx.runner.instances}
+    _save(ctx, f'{tag}-try-leave', out)
+    return {'outcome': out['outcome'], 'looks': len(out['looks']), 'room_s': out.get('room_s')}
 
 
 # --- cross-host pair (primary 2026-11-10 00:05Z: one instance per PC, one driver per host) ---------------------------
