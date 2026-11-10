@@ -924,18 +924,71 @@ def wait_answered(ctx, tag='ry', cap_s=90, skip_if_left=None):
         return _save(ctx, f'{tag}-answered-skip', {'after': skip_if_left})
     path = _trace_path(ctx) or ''
     start = _size(path)     # called right after the match's battle step; the answer comes about 21 s later
+    det_size = _size(_own_det(ctx))
     began = time.monotonic()
     while time.monotonic() - began < cap_s:
         ctx.check_stop()
         if any(s['kind'] == 'child' and s['x8'] == '0x5' for s in _states(_trace_records(path, start))):
             return _save(ctx, f'{tag}-answered-{ctx.on}', {'seconds': round(time.monotonic() - began, 1),
+                                                          'det_size': det_size,
                                                           'shot': str(ctx.shot(f'{tag}-answered'))})
         time.sleep(0.25)
     shot = ctx.shot(f'{tag}-not-answered')
     raise RuntimeError(f'{ctx.on}: no Rematch answer (child 5) within {cap_s} s: {shot}')
 
 
-def rematch_tries(ctx, tag='ry', button='plus', cap_s=90, every_s=0.5, leave=True, skip_if_left=None):
+def watch_reentry(ctx, tag='ry', cap_s=25, every_s=0.7, skip_if_left=None):
+    """Split pair, the console that watches (a): from its own Rematch answer (wait_answered before this step), a frame
+    every `every_s` with its own parent/child/PracticeScene/member state and the HUD's Leave Battle tab check, until its
+    match starts or `cap_s`; inside a GIF step this is the take of what a sees while b presses."""
+    runner, on = ctx.runner, ctx.on
+    if skip_if_left and _try_outcome(ctx, skip_if_left) != 'matched':
+        return _save(ctx, f'{tag}-watch-skip', {'after': skip_if_left})
+    path = _trace_path(ctx) or ''
+    start = max(0, _size(path) - 262144)    # the states before the step (the answer) for the first look
+    mark = _size(path)                      # a match from here on
+    out = {'tag': tag, 'on': on, 'looks': []}
+    began = time.monotonic()
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        now = _own_now(_states(_trace_records(path, start)))
+        shot = ctx.shot(f'{tag}-watch')
+        out['looks'].append(dict(now, t=round(time.monotonic() - began, 2), shot=str(shot)))
+        if _match_in_trace(runner, on, mark):
+            out['looks'].append({'t': round(time.monotonic() - began, 2), 'what': 'match-found (trace)'})
+            break
+        time.sleep(every_s)
+    return _save(ctx, f'{tag}-watch-{on}', out)
+
+
+def battle_self_if(ctx, tag='ry', wait_s=60, skip_if_left=None):
+    """Split pair: play this console's own fighter if a match session started since its Rematch answer
+    (wait_answered's detector mark), waiting up to `wait_s`; records `{tag}-try-leave.json` as matched / none, so a
+    later `skip_if_left` on this side follows what happened here."""
+    if skip_if_left and _try_outcome(ctx, skip_if_left) != 'matched':
+        _save(ctx, f'{tag}-try-leave', {'tag': tag, 'outcome': 'skipped', 'looks': []})
+        return _save(ctx, f'{tag}-battle-skip-{ctx.on}', {'after': skip_if_left})
+    det = _own_det(ctx)
+    found = sorted(Path(ctx.row_dir).parent.glob(f'*/{tag}-answered-{ctx.on}.json'))
+    mark = json.loads(found[-1].read_text()).get('det_size', 0) if found else _size(det)
+    began = time.monotonic()
+    matched = False
+    while time.monotonic() - began < wait_s:
+        ctx.check_stop()
+        if SESSION.search(_tail(det, mark)):
+            matched = True
+            break
+        time.sleep(1.0)
+    own = sorted(Path(ctx.row_dir).parent.glob(f'*/{tag}-try-leave.json'))
+    if not own:      # the watching side has no try of its own: record what happened here
+        _save(ctx, f'{tag}-try-leave', {'tag': tag, 'outcome': 'matched' if matched else 'none', 'looks': []})
+    if not matched:
+        return _save(ctx, f'{tag}-battle-skip-{ctx.on}', {'waited_s': wait_s})
+    return battle_self(ctx, tag)
+
+
+def rematch_tries(ctx, tag='ry', button='plus', cap_s=90, every_s=0.5, leave=True, skip_if_left=None,
+                  peer_host=None, peer_trace=None):
     """Primary 14:55Z, I2: after both consoles answered Rematch Yes, this instance (the opponent) presses `button`
     at each phase of the re-entry: every time its own parent/child/PracticeScene/member state changes, press once,
     and take frames on both consoles 0.6 s later. With Plus and the Leave Battle tab in the menu, `leave` takes the
@@ -945,9 +998,18 @@ def rematch_tries(ctx, tag='ry', button='plus', cap_s=90, every_s=0.5, leave=Tru
     if skip_if_left and _try_outcome(ctx, skip_if_left) != 'matched':
         return _save(ctx, f'{tag}-rematch-skip', {'after': skip_if_left, 'outcome': _try_outcome(ctx, skip_if_left)})
     peer = 'a' if on == 'b' else 'b'
-    path, ppath = _trace_path(ctx) or '', _trace_path(ctx, peer) or ''
-    start, pstart = _size(path), _size(ppath)
-    out = {'tag': tag, 'on': on, 'button': button, 'phases': []}
+    path = _trace_path(ctx) or ''
+    ppath = peer_trace if peer_host else (_trace_path(ctx, peer) or '')
+    start, pstart = _size(path), (0 if peer_host else _size(ppath))
+
+    def peer_now():
+        if peer_host:      # split pair: the peer's parent/child from its own trace on its host
+            states = _peer_states(peer_host, ppath) or []
+            return {'parent': next((s['x8'] for s in reversed(states) if s['kind'] == 'parent'), None),
+                    'child': next((s['x8'] for s in reversed(states) if s['kind'] == 'child'), None)}
+        return _own_now(_states(_trace_records(ppath, pstart)))
+
+    out = {'tag': tag, 'on': on, 'button': button, 'phases': [], 'peer_host': peer_host}
     began, last = time.monotonic(), None
     while time.monotonic() - began < cap_s:
         ctx.check_stop()
@@ -962,14 +1024,16 @@ def rematch_tries(ctx, tag='ry', button='plus', cap_s=90, every_s=0.5, leave=Tru
         key = (now['parent'], now['child'], now['practice'], now['member'])
         if key != last:
             last = key
-            entry = dict(now, t=t, peer=_own_now(_states(_trace_records(ppath, pstart))))
+            entry = dict(now, t=t, peer=peer_now())
             if button:
                 ctx.press(button, 80)
                 entry['pressed'] = button
             time.sleep(0.6)
             shot = ctx.shot(f'{tag}-{on}')
             entry['menu'], entry['tab'] = _menu_shown(ctx, shot), _tab_shown(ctx, shot)
-            entry['shots'] = {on: str(shot), peer: str(runner.shot(peer, f'{tag}-{peer}'))}
+            entry['shots'] = {on: str(shot)}
+            if not peer_host:
+                entry['shots'][peer] = str(runner.shot(peer, f'{tag}-{peer}'))
             out['phases'].append(entry)
             if button == 'plus' and entry['tab'] and leave:
                 got = _fast_leave(ctx, tag, start)
@@ -984,7 +1048,8 @@ def rematch_tries(ctx, tag='ry', button='plus', cap_s=90, every_s=0.5, leave=Tru
                       'matched' if _match_in_trace(runner, on, start) else 'none')
     keep = ('child', 'parent', 'practice_state', 'practice_result', 'member_state', 'quit_request', 'practice_leave')
     out['states'] = {on: [s for s in _states(_trace_records(path, start)) if s['kind'] in keep],
-                     peer: [s for s in _states(_trace_records(ppath, pstart)) if s['kind'] in keep]}
+                     peer: (_peer_states(peer_host, ppath) or [] if peer_host else
+                            [s for s in _states(_trace_records(ppath, pstart)) if s['kind'] in keep])}
     out['frames'] = {k: str(runner.shot(k, f'{tag}-end')) for k in ctx.runner.instances}
     _save(ctx, f'{tag}-rematch-tries', out)
     # pause_during_join's shape too, so after_soft plays a match that followed
