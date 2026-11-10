@@ -13,6 +13,8 @@ import copy
 import json
 import os
 import re
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -925,6 +927,45 @@ def battle_if_matched(ctx, tag='ry'):
     if outcome != 'matched':
         return _save(ctx, f'{tag}-battle-skip', {'outcome': outcome})
     return battle(ctx, tag)
+
+
+GDB_PORT = 6543
+
+
+def _gdb_dir(ctx):
+    return Path(ctx.row_dir).parent / 'gdb'
+
+
+def gdb_on(ctx, port=GDB_PORT):
+    """Freeze A/B (primary 17:59Z): before this instance's game loads, turn Eden's GDB stub on (`core.use_gdbstub`;
+    the instance runs untraced, Eden refuses tracing with the stub) and start `gdbdump.py hold` beside the run (copied
+    from the rc6 hang lane's rows-hang-qp). The stub holds the guest at its entry until the helper connects and lets
+    it run; the helper stays attached and answers `gdb/dump-<n>.req` with every guest thread's registers."""
+    folder = _gdb_dir(ctx)
+    folder.mkdir(parents=True, exist_ok=True)
+    got = ctx.call('settings.set', {'key': 'core.use_gdbstub', 'value': True})
+    listen = ctx.call('settings.get', {'key': 'core.gdbstub_port'})
+    log = open(folder / 'hold.out', 'a')
+    helper = Path(__file__).resolve().parent / 'gdbdump.py'
+    proc = subprocess.Popen([sys.executable, '-B', str(helper), 'hold', str(port), str(folder), '900'],
+                            stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+    out = {'set': got, 'port': listen, 'helper_pid': proc.pid, 'folder': str(folder)}
+    _save(ctx, f'gdb-on-{ctx.on}', out)
+    if str((got or {}).get('value', got)).lower() not in ('true', '1'):
+        raise RuntimeError(f'core.use_gdbstub not on: {got}')
+    return {'helper_pid': proc.pid, 'port': listen}
+
+
+def gdb_attached(ctx, cap_s=60):
+    """After the load: the helper attached and let the guest run."""
+    log = _gdb_dir(ctx) / 'hold.log'
+    began = time.monotonic()
+    while time.monotonic() - began < cap_s:
+        text = log.read_text() if log.exists() else ''
+        if '"first"' in text:
+            return _save(ctx, f'gdb-attached-{ctx.on}', {'hold_log': text[-600:]})
+        time.sleep(1.0)
+    raise RuntimeError(f'the GDB helper never attached: {log}')
 
 
 def wait_answered(ctx, tag='ry', cap_s=90, skip_if_left=None):

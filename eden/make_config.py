@@ -153,6 +153,11 @@ POINTS = [
 ]
 
 
+# The member pass's count compare (`cmp w8, #1` after `ldr w8, [x8, x9]`, x26 = the slot): which slots reach it and
+# what they load (candidate N's site; freeze A/B 2026-11-10).
+GATE_POINT = {'target': 'main+0x1563f04', 'registers': ['x8', 'x26', 'x30'], 'rate_limit': 20}
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -180,6 +185,10 @@ def main():
     p.add_argument('--host-base', help='JSON with top-level keys to override (host, hostname, runner, ...)')
     p.add_argument('--authorization', required=True)
     p.add_argument('--only', help='a or b: a one-instance config (the pair split across hosts, one instance per PC)')
+    p.add_argument('--untraced', action='append', default=[],
+                   help='a or b: no trace points for that instance (Eden refuses tracing with its GDB stub on)')
+    p.add_argument('--gate-point', action='store_true',
+                   help='also trace the member pass\'s count compare .1563f04 (x8 = the loaded count, x26 = the slot)')
     args = p.parse_args()
     src = json.loads(Path(args.source).read_text())
     nros = {}
@@ -211,7 +220,9 @@ def main():
         inst['sources'] = {'detector_log': 'user/sdmc/ultimate/ssbu-desync-detector/events.log',
                            'tile_log': 'user/sdmc/ultimate/ssbu-tile-cursor/events.log',
                            'qcf_log': 'user/sdmc/ultimate/quickplay-cancel-fix/events.log'}
-        inst['trace'] = {'unmapped_access': 'log', 'symbols': [], 'points': POINTS}
+        if key not in args.untraced:
+            points = POINTS + ([GATE_POINT] if args.gate_point else [])
+            inst['trace'] = {'unmapped_access': 'log', 'symbols': [], 'points': points}
         if args.res is not None:
             inst['eden_settings'] = {'core.resolution_setup': args.res}
         cfg['instances'].append(inst)
