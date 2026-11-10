@@ -89,6 +89,23 @@ receipts, frames and logs stay with the run under its label.
 - `join-1` and `join-2` in xrm08 repeat the row without the recording. b keeps the menu open through a's load and a
   joins with the plugin. Both matches were played and ended clean on both consoles.
 
+## Online review (the one hook)
+
+- **Where it runs:** `.1851674`, in PracticeScene's running state (the waiting area), after its update call. It
+  returns to the stock instructions, so no game code is skipped or reordered. It reads the mode word, this console's
+  member ID and the station records, then reads and writes one 32-bit count.
+- **Random numbers:** none drawn, and none of the game's draws touched.
+- **What it writes:**
+  - Only the own slot's count in a Quickplay lobby (`0x5313fb4 + slot * 0xb0`), and only from 1 to 2.
+  - A scan of the 13.0.5 code for the count's address finds the character select's reset (`.230d000`), the bump
+    after a battle (`.2315f40`) and the waiting battle's member pass (`.15637a0`). A member's leave resets the slot
+    through the slot table (`.16af2e0`).
+  - The count is not part of a fighter, the stage or the round. The review didn't trace every user of the slot table
+    (`0x5313f08`); the two-console matches below are the check on that.
+- **Matches after it:** the matches after the change were played to the end on both consoles: the same sessions, the
+  same end frames and `desync_seen=0` (xrm07, xrm08, xrm09, above).
+- **Replays:** a replay never enters the waiting area, so the hook doesn't run there. No replay A/B was needed.
+
 ## Static checks
 
 - **Sites:** five sites are checked against their 13.0.5 bytes before anything is installed.
