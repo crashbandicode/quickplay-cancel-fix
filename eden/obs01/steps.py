@@ -949,15 +949,26 @@ def ready_peek_and_wait_session(ctx, tag='m', cap_s=150, peek_cap_s=60):
         states = _states(_trace_records(trace, tstart))
         if any(s['kind'] == 'member_state' and (s['regs'] or {}).get('x1') == '0x7' for s in states):
             peek['seen_7'] = round(time.monotonic() - began, 2)
-            time.sleep(0.3)
-            ctx.press('plus', 80)
-            time.sleep(0.6)
-            shot = ctx.shot(f'{tag}-peek')
-            peek.update(menu=_menu_shown(ctx, shot), tab=_tab_shown(ctx, shot), shot=str(shot))
-            if peek['menu'] or peek['tab']:
-                ctx.press('b', 80)
-                time.sleep(0.5)
-                peek['closed_shot'] = str(ctx.shot(f'{tag}-peek-closed'))
+            peek['looks'] = []
+            time.sleep(0.8)
+            # The menu opens over about half a second, once the waiting area takes input (qcf-srm10: the
+            # joiner's tab came about 3.5 s after its ready report): Plus, look, up to 6 times, until it shows.
+            for i in range(6):
+                if SESSION.search(_tail(det, start)):
+                    peek['too_late'] = 'session started'
+                    break
+                ctx.press('plus', 80)
+                time.sleep(0.9)
+                shot = ctx.shot(f'{tag}-peek-{i}')
+                menu, tab = _menu_shown(ctx, shot), _tab_shown(ctx, shot)
+                peek['looks'].append({'t': round(time.monotonic() - began, 2), 'menu': menu, 'tab': tab,
+                                      'shot': str(shot)})
+                if menu or tab:
+                    peek.update(menu=menu, tab=tab, shot=str(shot))
+                    ctx.press('b', 80)
+                    time.sleep(0.5)
+                    peek['closed_shot'] = str(ctx.shot(f'{tag}-peek-closed'))
+                    break
             break
         time.sleep(0.2)
     _save(ctx, f'{tag}-peek-{ctx.on}', peek)
@@ -971,14 +982,30 @@ def ready_peek_and_wait_session(ctx, tag='m', cap_s=150, peek_cap_s=60):
     raise RuntimeError(f'{ctx.on}: no match session within {cap_s} s of Ready (peek {peek})')
 
 
-def ready_and_settle(ctx, tag='w', settle_s=15.0):
-    """An untraced instance (b with the GDB stub, freeze A/B) readies alone. With no trace to gate on and nothing in
-    its detector log before a match, a fixed wait (rounded up from the 5-10 s its waiting area took when traced),
-    then a frame of it."""
-    ready = _ready(ctx, tag)
-    time.sleep(settle_s)
-    return _save(ctx, f'{tag}-settled-{ctx.on}', {'ready': ready, 'settle_s': settle_s,
-                                                 'shot': str(ctx.shot(f'{tag}-settled'))})
+def ready_and_settle(ctx, tag='w', tries=3, look_s=30.0):
+    """An untraced instance (b with the GDB stub, freeze A/B) readies alone and is gated on its own screen: its
+    waiting area with the P2 slot still "Waiting..." (the p2-waiting reference), so the peer then joins this room as
+    in the traced arms (qcf-xfz5: without a gate, a's search came first and b joined a's room). Readies again when
+    the waiting area doesn't come."""
+    attempts = []
+    for i in range(tries):
+        if i:
+            css_to_banner(ctx)
+        attempts.append({'ready': _ready(ctx, f'{tag}-{i}'), 'looks': []})
+        began = time.monotonic()
+        while time.monotonic() - began < look_s:
+            ctx.check_stop()
+            shot = ctx.shot(f'{tag}-settle-look')
+            diff = ctx.runner.roi_diff(str(shot), str(REFS / 'p2-waiting.png'), list(P2_BOX), True)
+            attempts[-1]['looks'].append(round(diff, 1))
+            if diff <= 25:
+                time.sleep(2.0)
+                return _save(ctx, f'{tag}-settled-{ctx.on}', {'attempts': attempts, 'shot': str(shot),
+                                                             'seconds': round(time.monotonic() - began, 1)})
+            time.sleep(1.0)
+    shot = ctx.shot(f'{tag}-settle-failed')
+    _save(ctx, f'{tag}-settled-{ctx.on}', {'attempts': attempts, 'shot': str(shot)})
+    raise RuntimeError(f'{ctx.on}: no waiting area (P2 "Waiting...") after {tries} Readys: {shot}')
 
 
 def rematch_match(ctx, tag='ry', wait_s=90):
@@ -987,7 +1014,7 @@ def rematch_match(ctx, tag='ry', wait_s=90):
     Saves `{tag}-try-leave.json` (matched / none)."""
     found = sorted(Path(ctx.row_dir).parent.glob(f'*/{tag}-answered-{ctx.on}.json'))
     det = _own_det(ctx)
-    mark = json.loads(found[-1].read_text()).get('det_size', 0) if found else _size(det)
+    mark = json.loads(found[-1].read_text()).get('det_at_answer', 0) if found else _size(det)
     began = time.monotonic()
     matched = None
     while time.monotonic() - began < wait_s:
@@ -1002,7 +1029,7 @@ def rematch_match(ctx, tag='ry', wait_s=90):
         return _save(ctx, f'{tag}-battle-skip', {'waited_s': wait_s,
                                                  'frames': {k: str(ctx.runner.shot(k, f'{tag}-no-match'))
                                                             for k in ctx.runner.instances}})
-    return battle(ctx, tag)
+    return battle(ctx, tag, back=0)
 
 
 GDB_PORT = 6543
@@ -1061,6 +1088,7 @@ def wait_answered(ctx, tag='ry', cap_s=90, skip_if_left=None):
         if any(s['kind'] == 'child' and s['x8'] == '0x5' for s in _states(_trace_records(path, start))):
             return _save(ctx, f'{tag}-answered-{ctx.on}', {'seconds': round(time.monotonic() - began, 1),
                                                           'det_size': det_size,
+                                                          'det_at_answer': _size(_own_det(ctx)),
                                                           'shot': str(ctx.shot(f'{tag}-answered'))})
         time.sleep(0.25)
     shot = ctx.shot(f'{tag}-not-answered')
@@ -1443,11 +1471,13 @@ def _vary_still(runner, on, tick):
                                          'duration_ms': 80, 'lease_ms': 500})
 
 
-def battle(ctx, tag='m', cap_s=300, shot_every_s=20.0):
-    """Both fighters act (no idle drop) until both detectors log sync_end. Returns the lines; fails on a desync."""
+def battle(ctx, tag='m', cap_s=300, shot_every_s=20.0, back=4096):
+    """Both fighters act (no idle drop) until both detectors log sync_end (read from ack bytes before now: 0 when
+    called on the session line itself, so an earlier match's sync_end can't end it). Returns the lines; fails on a
+    desync."""
     runner = ctx.runner
     logs = {k: runner.instances[k]['detector_log'] for k in ctx.runner.instances}
-    starts = {k: max(0, _size(p) - 4096) for k, p in logs.items()}
+    starts = {k: max(0, _size(p) - back) for k, p in logs.items()}
     ended, tick = {}, 0
     began = time.monotonic()
     next_shot = began
