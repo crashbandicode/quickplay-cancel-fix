@@ -1,6 +1,7 @@
 //! Switch half: the version and site checks, the one inline hook on the
 //! waiting area's frame (on another plugin's hook there if it finds one, see
-//! `chain`) that gives a character-select lobby the rematch count, and the
+//! `chain`) that gives a character-select lobby the rematch count while the
+//! waiting area is up and puts the native count back at its exit, and the
 //! install line. The hook runs on the game's main thread, allocates nothing and
 //! starts no thread; the diagnostic build formats events into a static ring
 //! that a writer thread appends to `events.log`.
@@ -99,26 +100,43 @@ unsafe fn slot_stations() -> [u8; model::SLOTS] {
     stations
 }
 
+/// The slot whose count the plugin raised and has not put back (`NONE`: none).
+/// Only the waiting-area hook, on the game's main thread, touches it.
+static RAISED: AtomicU64 = AtomicU64::new(NONE);
+const NONE: u64 = u64::MAX;
+
+unsafe fn slot_counts() -> [u32; model::SLOTS] {
+    core::array::from_fn(|slot| read_u32(base() + (model::SLOT_COUNT + slot * model::SLOT_STRIDE) as u64))
+}
+
 /// A frame of the waiting area (`model::WAIT`): in a Quickplay lobby entered
 /// from the character select, this console's slot takes the count a rematch
-/// lobby has (`model::adopt`). Every other frame reads a word and returns.
-unsafe extern "C" fn wait_frame(_: &mut InlineCtx) {
+/// lobby has while the waiting area is up, and gets its native count back on
+/// the frame PracticeScene requests its exit (`model::frame`). Every other
+/// frame reads a few words and returns.
+unsafe extern "C" fn wait_frame(ctx: &mut InlineCtx) {
+    let raised = match RAISED.load(Ordering::Relaxed) {
+        NONE => None,
+        slot => Some(slot as usize).filter(|s| *s < model::SLOTS),
+    };
     let mode = read_u32(base() + model::MODE as u64);
-    if mode != model::QUICKPLAY {
+    if raised.is_none() && mode != model::QUICKPLAY {
         return;
     }
-    let Some(svc) = service() else {
-        return;
+    let context = ctx.registers[model::WAIT_CONTEXT_REGISTER].x();
+    let exiting = context != 0 && read_u8(context + model::PRACTICE_EXIT as u64) != 0;
+    let own = match service() {
+        Some(svc) => model::own_slot(&slot_stations(), own_station(svc)),
+        None => None,
     };
-    let Some(slot) = model::own_slot(&slot_stations(), own_station(svc)) else {
-        return;
-    };
-    let count = (base() + (model::SLOT_COUNT + slot * model::SLOT_STRIDE) as u64) as *mut u32;
-    let before = count.read();
-    if let Some(after) = model::adopt(mode, before) {
+    let counts = slot_counts();
+    let (next, write) = model::frame(raised, mode, own, &counts, exiting);
+    RAISED.store(next.map_or(NONE, |slot| slot as u64), Ordering::Relaxed);
+    if let Some((slot, after)) = write {
+        let count = (base() + (model::SLOT_COUNT + slot * model::SLOT_STRIDE) as u64) as *mut u32;
         count.write(after);
         #[cfg(feature = "diag")]
-        diag::push(format_args!("diag adopted slot={slot} count={before}->{after}"));
+        diag::push(format_args!("diag slot={slot} count={}->{after} exiting={exiting}", counts[slot]));
     }
 }
 

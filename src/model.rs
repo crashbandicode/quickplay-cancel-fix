@@ -16,6 +16,13 @@
 //! rematch lobby has: 1 becomes 2, on the first waiting-area frame where this
 //! console's slot is known. Nothing else is written; a slot already at 2 or
 //! more (every rematch lobby) is left as it is, and so is every other slot.
+//!
+//! Candidate R (research, not released): the raised count lasts only while
+//! the waiting area is up. On the frame PracticeScene requests its exit (the
+//! match starts, or the player left), the plugin puts the native 1 back, so
+//! the post-battle bump makes it 2, as the opponent counts this console's
+//! slot. v0.2.0 left it raised, so after the first match this console
+//! counted its own slot 3 while the opponent counted it 2.
 
 use crate::chain;
 
@@ -63,6 +70,10 @@ impl Site {
 /// PracticeScene context. Nothing jumps into the 20 bytes from here; no flags
 /// are live.
 pub const WAIT_OFFSET: usize = 0x1851674;
+/// The register holding the PracticeScene context at `WAIT`, and its exit
+/// request byte there (non-zero once the scene is to end).
+pub const WAIT_CONTEXT_REGISTER: usize = 19;
+pub const PRACTICE_EXIT: usize = 0xf0;
 pub const WAIT: Site = Site {
     name: "wait",
     offset: WAIT_OFFSET,
@@ -193,6 +204,38 @@ pub fn own_slot(stations: &[u8; SLOTS], mine: u8) -> Option<usize> {
 /// else (a rematch lobby's 2 or more, an unset 0) stays.
 pub fn adopt(mode: u32, count: u32) -> Option<u32> {
     (mode == QUICKPLAY && count == FRESH_COUNT).then_some(REMATCH_COUNT)
+}
+
+/// The count to put back into a slot this plugin raised, when the waiting
+/// area ends: the native 1, if the slot still holds the 2 the plugin wrote
+/// (anything else is the game's own value and stays).
+pub fn restore(count: u32) -> Option<u32> {
+    (count == REMATCH_COUNT).then_some(FRESH_COUNT)
+}
+
+/// One waiting-area frame: the slot the plugin raised and has not put back
+/// (`raised`), the online mode, this console's slot, the slots' counts and
+/// whether PracticeScene requested its exit. Returns what the plugin keeps
+/// raised after this frame and the count it writes, if any.
+pub fn frame(
+    raised: Option<usize>,
+    mode: u32,
+    own: Option<usize>,
+    counts: &[u32; SLOTS],
+    exiting: bool,
+) -> (Option<usize>, Option<(usize, u32)>) {
+    if exiting {
+        let write = raised.and_then(|slot| restore(counts[slot]).map(|count| (slot, count)));
+        return (None, write);
+    }
+    if let Some(slot) = raised {
+        // Still raised: nothing to do, unless the game wrote the slot meanwhile.
+        return (Some(slot).filter(|s| counts[*s] == REMATCH_COUNT), None);
+    }
+    match own.and_then(|slot| adopt(mode, counts[slot]).map(|count| (slot, count))) {
+        Some((slot, count)) => (Some(slot), Some((slot, count))),
+        None => (None, None),
+    }
 }
 
 /// A text line built in a fixed buffer; anything past `N` bytes is dropped.
@@ -443,15 +486,105 @@ mod tests {
 
     /// After a cancel the next character-select entry resets the room, and the
     /// plugin gives that lobby the count again; a played first match leaves the
-    /// count one battle higher, as a rematch lobby's own slot is after its battle.
+    /// native count of one battle (candidate R puts the 1 back at the exit).
     #[test]
     fn every_character_select_entry_is_covered() {
         let mut room = Room::from_character_select().with_plugin(0);
         assert!(leave_offered(&room, 0));
+        if let (_, Some((slot, count))) = frame(Some(0), QUICKPLAY, Some(0), &room.counts, true) {
+            room.counts[slot] = count;
+        }
         room.battle(&[0, 1]);
-        assert_eq!(room.counts[0], REMATCH_COUNT + 1);
+        assert_eq!(room.counts[0], REMATCH_COUNT);
         let room = Room::from_character_select().with_plugin(0);
         assert_eq!(room.counts[0], REMATCH_COUNT);
+    }
+
+    #[test]
+    fn the_exit_request_is_the_waits_first_load() {
+        // ldrb w8, [x<WAIT_CONTEXT_REGISTER>, #PRACTICE_EXIT]
+        let word = WAIT.stock()[0];
+        assert_eq!(word >> 22, 0x0e5, "ldrb (unsigned offset)");
+        assert_eq!(((word >> 5) & 31) as usize, WAIT_CONTEXT_REGISTER);
+        assert_eq!(ldst_offset(word), PRACTICE_EXIT);
+        assert_eq!(word & 31, 8);
+    }
+
+    /// One console's waiting area with candidate R: `frames` waiting frames,
+    /// then the exit frame. Returns the counts after it and the writes made.
+    fn visit(counts: &mut [u32; SLOTS], own: usize, frames: usize) -> Vec<(usize, u32)> {
+        let mut raised = None;
+        let mut writes = Vec::new();
+        for i in 0..=frames {
+            let (next, write) = frame(raised, QUICKPLAY, Some(own), counts, i == frames);
+            if let Some((slot, count)) = write {
+                counts[slot] = count;
+                writes.push((slot, count));
+            }
+            raised = next;
+        }
+        assert_eq!(raised, None, "nothing stays raised after the exit");
+        writes
+    }
+
+    #[test]
+    fn the_raised_count_lasts_only_while_the_waiting_area_is_up() {
+        let mut counts = [FRESH_COUNT; SLOTS];
+        // During the waiting area: raised once, so the leave is offered while the opponent loads.
+        let (raised, write) = frame(None, QUICKPLAY, Some(0), &counts, false);
+        assert_eq!((raised, write), (Some(0), Some((0, REMATCH_COUNT))));
+        counts[0] = REMATCH_COUNT;
+        assert_eq!(frame(raised, QUICKPLAY, Some(0), &counts, false), (Some(0), None));
+        // The exit request: the native count goes back.
+        assert_eq!(frame(raised, QUICKPLAY, Some(0), &counts, true), (None, Some((0, FRESH_COUNT))));
+        // A whole visit writes 2 then 1, and nothing else.
+        let mut counts = [FRESH_COUNT; SLOTS];
+        assert_eq!(visit(&mut counts, 1, 30), vec![(1, REMATCH_COUNT), (1, FRESH_COUNT)]);
+        assert_eq!(counts, [FRESH_COUNT; SLOTS]);
+    }
+
+    #[test]
+    fn a_rematch_lobby_is_left_alone() {
+        // Native 2 or more: no raise, and no restore at the exit.
+        for count in [2, 3, 5] {
+            let mut counts = [FRESH_COUNT; SLOTS];
+            counts[0] = count;
+            assert_eq!(visit(&mut counts, 0, 10), vec![], "count {count}");
+            assert_eq!(counts[0], count);
+        }
+        // Not Quickplay: nothing.
+        let counts = [FRESH_COUNT; SLOTS];
+        assert_eq!(frame(None, 0x0701_0400, Some(0), &counts, false), (None, None));
+        // The slot changed under a raise (a new character-select entry): dropped, not restored.
+        assert_eq!(frame(Some(0), QUICKPLAY, Some(0), &counts, false), (None, None));
+        let mut counts = [FRESH_COUNT; SLOTS];
+        counts[0] = 3;
+        assert_eq!(frame(Some(0), QUICKPLAY, Some(0), &counts, true), (None, None));
+    }
+
+    /// Parity with the game: after the first match from the character select
+    /// and a rematch, the plugin's console counts its own slot exactly as the
+    /// opponent's console counts it, and as a console without the plugin
+    /// counts its own (qcf-srm11: 1, 2, 3; v0.2.0 in qcf-srm12: 2, 3 against
+    /// the opponent's 2).
+    #[test]
+    fn both_consoles_count_the_same_after_each_battle() {
+        for (own, opponent) in [(0, 1), (1, 0), (3, 2)] {
+            // The fixed console (a), a vanilla one in its place (v), and the opponent's view (b).
+            let mut a = [FRESH_COUNT; SLOTS];
+            let mut v = [FRESH_COUNT; SLOTS];
+            let mut b = [FRESH_COUNT; SLOTS];
+            for battle in 1..=3u32 {
+                visit(&mut a, own, 20);
+                for counts in [&mut a, &mut v, &mut b] {
+                    counts[own] += 1;
+                    counts[opponent] += 1;
+                }
+                assert_eq!(a[own], b[own], "battle {battle}: a's own slot as a and b count it");
+                assert_eq!(a, v, "battle {battle}: a counts as a console without the plugin");
+                assert_eq!(a[own], FRESH_COUNT + battle);
+            }
+        }
     }
 
     #[test]
