@@ -137,15 +137,26 @@ def reach_css_tile(ctx, tries=5, wait_s=4.0):
 def css_to_banner(ctx, cap_s=20):
     """Character select reached after a match or a leave: the READY TO FIGHT banner up (token placed), or a tile step
     and A to place the token. Looks first."""
-    shot = ctx.shot('css-look')
-    diff = _diff(ctx, shot, REFS / 'ready-banner.png', BANNER_ROI)
-    if diff <= 40:
-        return {'banner': 'already up', 'diff': round(diff, 2)}
+    diffs = []
+    for i in range(3):   # the banner animates in; look a few times before stepping (srm06/xrm03: a false "no banner")
+        shot = ctx.shot(f'css-look-{i}')
+        diff = _diff(ctx, shot, REFS / 'ready-banner.png', BANNER_ROI)
+        diffs.append(round(diff, 2))
+        if diff <= 40:
+            return {'banner': 'already up', 'diffs': diffs}
+        time.sleep(0.7)
     ctx.play('tile-up')
-    ctx.gate('css-tile')
+    try:
+        ctx.gate('css-tile')
+    except RuntimeError:
+        shot = ctx.shot('css-look-after')
+        diff = _diff(ctx, shot, REFS / 'ready-banner.png', BANNER_ROI)
+        if diff <= 40:
+            return {'banner': 'up after the step', 'diffs': diffs + [round(diff, 2)]}
+        raise
     ctx.play('pick')
     ctx.gate('ready-banner-any')
-    return {'banner': 'stepped and placed', 'diff_before': round(diff, 2)}
+    return {'banner': 'stepped and placed', 'diffs_before': diffs}
 
 
 def _ready(ctx, tag, tries=4):
@@ -549,7 +560,10 @@ def rematch_answers(ctx, answers=None, tag='rm', cap_s=180, tolerance=15.0):
     (lobby or character select) and frames."""
     runner = ctx.runner
     answers = answers or {'a': 'yes', 'b': 'no'}
-    out = {'answers': answers, 'seen': {}, 'diffs': {k: [] for k in answers}}
+    out = {'answers': answers, 'seen': {}, 'diffs': {k: [] for k in answers}, 'confirmed': {}}
+    traces = {k: runner.instances[k].get('trace_jsonl') or '' for k in answers}
+    starts = {k: _size(traces[k]) for k in answers}
+    first = {}
     began = time.monotonic()
     while time.monotonic() - began < cap_s and len(out['seen']) < len(answers):
         ctx.check_stop()
@@ -559,28 +573,59 @@ def rematch_answers(ctx, answers=None, tag='rm', cap_s=180, tolerance=15.0):
             shot = runner.shot(k, f'{tag}-look')
             diff = runner.roi_diff(str(shot), str(REFS / 'rematch-dialog.png'), list(DIALOG_ROI))
             out['diffs'][k] = (out['diffs'][k] + [round(diff, 1)])[-6:]
-            if diff < tolerance:
-                # The focus starts on Yes and Left/Right wrap (yrm01 m1: Right from Yes went to No): move only when
-                # the frame shows the other button focused, then A on the checked focus.
-                focus = _dialog_focus(shot)
-                chosen = shot
-                if focus != answer:
-                    _tap(runner, k, 'right' if answer == 'yes' else 'left')
-                    time.sleep(0.4)
-                    chosen = runner.shot(k, f'{tag}-{answer}-focus')
-                    if _dialog_focus(chosen) != answer:
-                        continue
-                _tap(runner, k, 'a')
-                out['seen'][k] = {'t': round(time.monotonic() - began, 1), 'dialog': str(shot),
-                                  'focus_before': focus, 'focus': str(chosen)}
+            if diff >= tolerance:
+                first.pop(k, None)
+                continue
+            # xrm03: an A on the dialog's first frame was dropped (the timer answered for a); press only once the
+            # dialog has been up for a second.
+            if time.monotonic() - first.setdefault(k, time.monotonic()) < 1.0:
+                continue
+            # The focus starts on Yes and Left/Right wrap (yrm01 m1: Right from Yes went to No): move only when
+            # the frame shows the other button focused, then A on the checked focus.
+            focus = _dialog_focus(shot)
+            chosen = shot
+            if focus != answer:
+                _tap(runner, k, 'right' if answer == 'yes' else 'left')
+                time.sleep(0.4)
+                chosen = runner.shot(k, f'{tag}-{answer}-focus')
+                if _dialog_focus(chosen) != answer:
+                    continue
+            _tap(runner, k, 'a')
+            out['seen'][k] = {'t': round(time.monotonic() - began, 1), 'dialog': str(shot),
+                              'focus_before': focus, 'focus': str(chosen), 'presses': 1}
         time.sleep(0.5)
     if len(out['seen']) < len(answers):
         _save(ctx, f'{tag}-rematch', out)
         raise RuntimeError(f'no Rematch? dialog on {set(answers) - set(out["seen"])} within {cap_s} s: {out["diffs"]}')
+    # An answer shows in the console's own trace as child 4 -> 5 within ~2.5 s (srm06, xrm03). If it doesn't and the
+    # dialog is still up with the chosen button focused, press A again (at most twice).
+    for _ in range(2):
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            for k in answers:
+                if k not in out['confirmed'] and any(
+                        s['kind'] == 'child' and s['x8'] == '0x5' for s in _states(_trace_records(traces[k], starts[k]))):
+                    out['confirmed'][k] = round(time.monotonic() - began, 1)
+            if len(out['confirmed']) == len(answers):
+                break
+            time.sleep(0.4)
+        missing = [k for k in answers if k not in out['confirmed']]
+        if not missing:
+            break
+        for k in missing:
+            shot = runner.shot(k, f'{tag}-repress-look')
+            if runner.roi_diff(str(shot), str(REFS / 'rematch-dialog.png'), list(DIALOG_ROI)) < tolerance \
+                    and _dialog_focus(shot) == answers[k]:
+                _tap(runner, k, 'a')
+                out['seen'][k]['presses'] += 1
     time.sleep(12.0)
     out['after'] = {k: str(runner.shot(k, f'{tag}-after')) for k in answers}
     out['where'] = {k: _where(runner, k) for k in answers}
-    return _save(ctx, f'{tag}-rematch', out)
+    _save(ctx, f'{tag}-rematch', out)
+    wrong = [k for k, answer in answers.items() if out['where'][k]['in_lobby'] != (answer == 'yes')]
+    if wrong:
+        raise RuntimeError(f'rematch answers {answers} left {wrong} in the wrong place: {out["where"]}')
+    return out
 
 
 def where_are(ctx, tag='where', wait_s=0.0):
@@ -848,12 +893,17 @@ def rematch_self(ctx, answer='no', tag='rm', cap_s=150, tolerance=15.0):
     runner, on = ctx.runner, ctx.on
     out = {'answer': answer, 'diffs': []}
     began = time.monotonic()
+    first = None
     while time.monotonic() - began < cap_s:
         ctx.check_stop()
         shot = runner.shot(on, f'{tag}-look')
         diff = runner.roi_diff(str(shot), str(REFS / 'rematch-dialog.png'), list(DIALOG_ROI))
         out['diffs'] = (out['diffs'] + [round(diff, 1)])[-6:]
-        if diff < tolerance:
+        if diff >= tolerance:
+            first = None
+        elif time.monotonic() - (first := first or time.monotonic()) < 1.0:
+            pass    # xrm03: an A on the dialog's first frame was dropped; press once it has been up for a second
+        else:
             focus = _dialog_focus(shot)
             chosen = shot
             if focus != answer:
