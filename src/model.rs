@@ -373,6 +373,87 @@ mod tests {
         assert_eq!(adopt(QUICKPLAY, REMATCH_COUNT), None);
     }
 
+    /// The room's per-slot counts as the game keeps them: the character
+    /// select's reset (`.230d000`), the bump of every present slot after a
+    /// battle (`.2315f40`), a leaving member's slot back to 1 (`.16af2e0`);
+    /// a rematch "Yes" goes back to the lobby without a reset.
+    struct Room {
+        counts: [u32; SLOTS],
+    }
+
+    impl Room {
+        fn from_character_select() -> Self {
+            Self { counts: [FRESH_COUNT; SLOTS] }
+        }
+
+        fn battle(&mut self, present: &[usize]) {
+            for slot in present {
+                self.counts[*slot] += 1;
+            }
+        }
+
+        fn member_left(&mut self, slot: usize) {
+            self.counts[slot] = FRESH_COUNT;
+        }
+
+        /// The plugin on a waiting-area frame, this console in `own`.
+        fn with_plugin(mut self, own: usize) -> Self {
+            if let Some(count) = adopt(QUICKPLAY, self.counts[own]) {
+                self.counts[own] = count;
+            }
+            self
+        }
+    }
+
+    /// Whether a new opponent's loading can be left: on Eden (qcf-xrm06 m0,
+    /// m5, m3; qcf-xrm07 after, before) it followed this console's own count,
+    /// shown at 2 or more and hidden at 1, whatever the joiner's slot held.
+    fn leave_offered(room: &Room, own: usize) -> bool {
+        room.counts[own] >= REMATCH_COUNT
+    }
+
+    /// Parity: a lobby entered from the character select, with the plugin,
+    /// against the lobby a rematch "Yes" returns to, through one table of
+    /// cases (own slot, the opponent's slot, battles before the rematch).
+    #[test]
+    fn the_character_select_lobby_matches_the_rematch_lobby() {
+        for (own, opponent, battles) in [(0, 1, 1), (1, 0, 1), (0, 1, 2), (1, 0, 3), (3, 2, 1)] {
+            // The rematch path: battles with an opponent who then declines; a new one joins.
+            let mut rematch = Room::from_character_select();
+            for _ in 0..battles {
+                rematch.battle(&[own, opponent]);
+            }
+            rematch.member_left(opponent);
+            // The character-select path, with and without the plugin; a new opponent joins.
+            let native = Room::from_character_select();
+            let fixed = Room::from_character_select().with_plugin(own);
+            assert!(leave_offered(&rematch, own), "{own} {opponent} {battles}");
+            assert!(!leave_offered(&native, own), "{own} {opponent} {battles}");
+            assert_eq!(leave_offered(&fixed, own), leave_offered(&rematch, own), "{own} {opponent} {battles}");
+            // The joiner's slot is the same fresh 1 in both lobbies, and no other slot is touched.
+            assert_eq!(fixed.counts[opponent], rematch.counts[opponent]);
+            for slot in (0..SLOTS).filter(|s| *s != own) {
+                assert_eq!(fixed.counts[slot], native.counts[slot]);
+            }
+            // A rematch lobby with the plugin is unchanged.
+            let counts = rematch.counts;
+            assert_eq!(rematch.with_plugin(own).counts, counts);
+        }
+    }
+
+    /// After a cancel the next character-select entry resets the room, and the
+    /// plugin gives that lobby the count again; a played first match leaves the
+    /// count one battle higher, as a rematch lobby's own slot is after its battle.
+    #[test]
+    fn every_character_select_entry_is_covered() {
+        let mut room = Room::from_character_select().with_plugin(0);
+        assert!(leave_offered(&room, 0));
+        room.battle(&[0, 1]);
+        assert_eq!(room.counts[0], REMATCH_COUNT + 1);
+        let room = Room::from_character_select().with_plugin(0);
+        assert_eq!(room.counts[0], REMATCH_COUNT);
+    }
+
     #[test]
     fn line_drops_overflow_and_adds_nul() {
         let mut line = Line::<8>::new();
