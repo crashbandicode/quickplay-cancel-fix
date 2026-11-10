@@ -31,12 +31,12 @@ def gif(name, on, length, reason, inner):
 
 
 def tries(tag, button, take_gif=True, skip_if_left=None, leave=True):
-    inner = [step('rematch_tries', 'b', tag=tag, button=button, cap_s=60, leave=leave,
-                  **({'skip_if_left': skip_if_left} if skip_if_left else {}))]
-    steps = ([gif(f'{tag}-a-rematch', 'a', 20, f"I2 evidence: a's screen while b presses {button} at each phase of "
-                  "the rematch re-entry; capped at 20 s so the rematch match that may follow isn't left idle during "
-                  "the encode; raw take", inner)] if take_gif else inner)
-    return steps + [step('battle_if_matched', 'a', tag=tag),
+    skip = {'skip_if_left': skip_if_left} if skip_if_left else {}
+    inner = [step('rematch_tries', 'b', tag=tag, button=button, cap_s=90, leave=leave, **skip)]
+    steps = ([gif(f'{tag}-a-rematch', 'a', 25, f"I2 evidence: a's screen from b's Rematch answer while b presses "
+                  f"{button} at each phase of the re-entry; capped at 25 s so the rematch match that may follow isn't "
+                  "left idle long during the encode; raw take", inner)] if take_gif else inner)
+    return [step('wait_answered', 'b', tag=tag, cap_s=90, **skip)] + steps + [step('battle_if_matched', 'a', tag=tag),
                     step('where_are', 'a', tag=f'{tag}-after', wait_s=4.0)]
 
 

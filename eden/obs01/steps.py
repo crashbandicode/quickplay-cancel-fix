@@ -917,7 +917,25 @@ def battle_if_matched(ctx, tag='ry'):
     return battle(ctx, tag)
 
 
-def rematch_tries(ctx, tag='ry', button='plus', cap_s=60, every_s=0.5, leave=True, skip_if_left=None):
+def wait_answered(ctx, tag='ry', cap_s=90, skip_if_left=None):
+    """Wait, without input, until this instance answered "Rematch?" (its IngameCallSequenceScene goes to state 5; the
+    CPU pilot answers Yes about 21 s after the match), so the re-entry's take starts at the re-entry."""
+    if skip_if_left and _try_outcome(ctx, skip_if_left) != 'matched':
+        return _save(ctx, f'{tag}-answered-skip', {'after': skip_if_left})
+    path = _trace_path(ctx) or ''
+    start = _size(path)     # called right after the match's battle step; the answer comes about 21 s later
+    began = time.monotonic()
+    while time.monotonic() - began < cap_s:
+        ctx.check_stop()
+        if any(s['kind'] == 'child' and s['x8'] == '0x5' for s in _states(_trace_records(path, start))):
+            return _save(ctx, f'{tag}-answered-{ctx.on}', {'seconds': round(time.monotonic() - began, 1),
+                                                          'shot': str(ctx.shot(f'{tag}-answered'))})
+        time.sleep(0.25)
+    shot = ctx.shot(f'{tag}-not-answered')
+    raise RuntimeError(f'{ctx.on}: no Rematch answer (child 5) within {cap_s} s: {shot}')
+
+
+def rematch_tries(ctx, tag='ry', button='plus', cap_s=90, every_s=0.5, leave=True, skip_if_left=None):
     """Primary 14:55Z, I2: after both consoles answered Rematch Yes, this instance (the opponent) presses `button`
     at each phase of the re-entry: every time its own parent/child/PracticeScene/member state changes, press once,
     and take frames on both consoles 0.6 s later. With Plus and the Leave Battle tab in the menu, `leave` takes the
