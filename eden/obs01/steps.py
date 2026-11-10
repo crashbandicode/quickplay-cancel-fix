@@ -971,6 +971,40 @@ def ready_peek_and_wait_session(ctx, tag='m', cap_s=150, peek_cap_s=60):
     raise RuntimeError(f'{ctx.on}: no match session within {cap_s} s of Ready (peek {peek})')
 
 
+def ready_and_settle(ctx, tag='w', settle_s=15.0):
+    """An untraced instance (b with the GDB stub, freeze A/B) readies alone. With no trace to gate on and nothing in
+    its detector log before a match, a fixed wait (rounded up from the 5-10 s its waiting area took when traced),
+    then a frame of it."""
+    ready = _ready(ctx, tag)
+    time.sleep(settle_s)
+    return _save(ctx, f'{tag}-settled-{ctx.on}', {'ready': ready, 'settle_s': settle_s,
+                                                 'shot': str(ctx.shot(f'{tag}-settled'))})
+
+
+def rematch_match(ctx, tag='ry', wait_s=90):
+    """Freeze A/B with b untraced: after this instance's (a's) Rematch answer (wait_answered, which marked its
+    detector log), wait for its match session; if one starts, both fighters act until both detectors end (battle).
+    Saves `{tag}-try-leave.json` (matched / none)."""
+    found = sorted(Path(ctx.row_dir).parent.glob(f'*/{tag}-answered-{ctx.on}.json'))
+    det = _own_det(ctx)
+    mark = json.loads(found[-1].read_text()).get('det_size', 0) if found else _size(det)
+    began = time.monotonic()
+    matched = None
+    while time.monotonic() - began < wait_s:
+        ctx.check_stop()
+        if SESSION.search(_tail(det, mark)):
+            matched = round(time.monotonic() - began, 1)
+            break
+        time.sleep(0.5)
+    _save(ctx, f'{tag}-try-leave', {'tag': tag, 'outcome': 'matched' if matched is not None else 'none',
+                                    'session_after_s': matched, 'looks': []})
+    if matched is None:
+        return _save(ctx, f'{tag}-battle-skip', {'waited_s': wait_s,
+                                                 'frames': {k: str(ctx.runner.shot(k, f'{tag}-no-match'))
+                                                            for k in ctx.runner.instances}})
+    return battle(ctx, tag)
+
+
 GDB_PORT = 6543
 
 
@@ -1481,8 +1515,12 @@ def leave_css_to_quickplay(ctx, tries=4):
 
 
 def z_instance(ctx):
-    """End row per instance: trace.unmapped_access total 0 and no panic/abort/crash/Unmapped in the console."""
-    got = ctx.call('trace.unmapped_access', {})
+    """End row per instance: trace.unmapped_access total 0 and no panic/abort/crash/Unmapped in the console. An
+    untraced instance (the GDB stub on) has no unmapped counter: only its console is checked."""
+    if not ctx.instance.get('trace_jsonl'):
+        got = {'total': '0', 'untraced': True}
+    else:
+        got = ctx.call('trace.unmapped_access', {})
     text = Path(ctx.instance['console_log']).read_text(errors='replace') if ctx.instance.get('console_log') else ''
     bad = {k: len(re.findall(k, text)) for k in ('panic', 'abort', 'crash', 'Unmapped')}
     events = Path(ctx.instance['qcf_log']).read_text(errors='replace') if ctx.instance.get('qcf_log') and \

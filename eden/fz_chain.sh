@@ -20,7 +20,7 @@ fi
 say "$prev finished: $(grep 'runner finished' "/home/intpa/eden-runs/$prev/freeze-watch.log" | cut -c1-140)"
 for item in "$@"; do
   label="${item%%:*}"; arm="${item##*:}"
-  bash "$in/down.sh" "$prev" > "/home/intpa/eden-runs/$prev/chain-down.log" 2>&1
+  [ -d "/home/intpa/eden-runs/$prev/state" ] && bash "$in/down.sh" "$prev" > "/home/intpa/eden-runs/$prev/chain-down.log" 2>&1
   say "$prev down: $(grep -E 'down rc|released' "/home/intpa/eden-runs/$prev/chain-down.log" | tr '\n' ' ' | cut -c1-160)"
   if pgrep -x eden >/dev/null; then say "STOP: Eden still running after $prev's Down"; exit 4; fi
   bash "$in/stage-fz.sh" "$label" "$arm" > "/tmp/stage-$label.log" 2>&1

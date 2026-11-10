@@ -37,6 +37,16 @@ if gdb:
                    else s for s in m1['steps']]
     assert any(s.get('run') == 'steps.py:ready_peek_and_wait_session' for s in m1['steps'])
     new[5] = m1
+    # b is untraced: its search gets a fixed settle instead of the trace gate, and the rematch is followed from a
+    # (a's answer in its trace, the match in its detector); b no longer presses B through the re-entry.
+    r01 = dict(new[4])
+    r01['steps'] = [{'run': 'steps.py:ready_and_settle', 'on': 'b', 'check': True, 'args': {'tag': 'w1'}}
+                    if s.get('run') == 'steps.py:ready_and_wait_searching' else s for s in r01['steps']]
+    new[4] = r01
+    ry1 = dict(new[6])
+    ry1['steps'] = [{'run': 'steps.py:wait_answered', 'on': 'a', 'check': True, 'args': {'tag': 'ry1', 'cap_s': 120}},
+                    {'run': 'steps.py:rematch_match', 'on': 'a', 'check': True, 'args': {'tag': 'ry1', 'wait_s': 90}}]
+    new[6] = ry1
 rows['rows'] = new
 rows['about'] = ("QCF freeze A/B (primary 17:35Z/17:59Z): qcf-srm12's m1 and ry1 (the first native rematch match "
                  "after a first match from the character select), played to the end; the arms differ only in a's "
