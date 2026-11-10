@@ -128,6 +128,22 @@ POINTS = [
                   {'expression': '[[[pc+0x3d5e608]+8]+0x88]+0x26070', 'type': 'bytes', 'size': 0x20},
                   {'expression': '[[[pc+0x3d5e608]+8]+0x88]+0x26120', 'type': 'bytes', 'size': 8},
                   {'expression': '[[[pc+0x3d5e608]+8]+0x88]+0x269c0', 'type': 'bytes', 'size': 0x70}]},
+    # A third sampler (srm09): the waiting battle's member/HUD pass .15637a0 (every 60 frames per object, x0 = the
+    # waiting battle, w1 = 1 on its reset). It decides each slot's HUD state ("Joined!" 1, "Preparing..." 6/7) and
+    # whether a joiner's fighter is prepared in the waiting battle, from globals the rematch re-entry may leave as
+    # they were: the online mode word 0x53050f0 (+0x53050f4), the per-slot table 0x5313fb4 (stride 0xb0, 1 joined,
+    # 2+ prepared) and the HUD member table 0x5308760 (stride 0x1c8). Absolute globals, pc-relative from .15637a0.
+    {'target': 'main+0x15637a0', 'registers': ['x0', 'x1', 'x30'], 'rate_limit': 4,
+     'captures': [{'expression': 'pc+0x3da1950', 'type': 'bytes', 'size': 8},
+                  {'expression': 'pc+0x3db0810', 'type': 'bytes', 'size': 0x170},
+                  {'expression': 'pc+0x3da4fc0', 'type': 'bytes', 'size': 0x3d0},
+                  {'expression': 'x0+0x1a0', 'type': 'bytes', 'size': 16}]},
+    # The same globals at 2 Hz from PracticeScene's running state (.1851660, every waiting-area frame, also while
+    # alone, before any waiting battle exists): their values at the CSS entry vs. the rematch re-entry.
+    {'target': 'main+0x1851660', 'rate_limit': 2,
+     'captures': [{'expression': 'pc+0x3ab3a90', 'type': 'bytes', 'size': 8},
+                  {'expression': 'pc+0x3ac2950', 'type': 'bytes', 'size': 0x170},
+                  {'expression': 'pc+0x3ab7100', 'type': 'bytes', 'size': 0x3d0}]},
 ]
 
 

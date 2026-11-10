@@ -376,26 +376,29 @@ def _explore_menu(ctx, tag, start, menu_shot):
     steps = []
     out = {'tab': _tab_shown(ctx, menu_shot), 'left': False, 'steps': steps}
     if out['tab']:
-        ctx.press('up', 120)
-        time.sleep(0.6)
-        shot = ctx.shot(f'{tag}-x-tab-focus')
-        steps.append({'button': 'up', 'tab_unfocused': _tab_shown(ctx, shot), 'shot': str(shot)})
-        ctx.press('a', 120)
-        time.sleep(1.2)
+        # Fast: the native window lasts only until the joiner reports ready (2.4-3.5 s on Eden, srm08 m0/m5, where
+        # the slower presses ran into "Get Ready"). Up, A, then Right only when the dialog shows No focused, A;
+        # frames are taken between presses only where a decision needs one.
+        ctx.press('up', 80)
+        time.sleep(0.25)
+        ctx.press('a', 80)
+        time.sleep(0.45)
         dialog = ctx.shot(f'{tag}-x-after-a')
         out['after_a'] = str(dialog)
         # "Would you like to leave the game?" opens on No (yrm01 m2b): move to Yes only when the frame shows No.
         focus = _dialog_focus(dialog)
         out['dialog_focus'] = focus
         if focus == 'no':
-            ctx.press('right', 120)
-            time.sleep(0.5)
-            dialog = ctx.shot(f'{tag}-x-yes-focus')
-            out['yes_focus'] = str(dialog)
-        if _dialog_focus(dialog) == 'yes':
-            ctx.press('a', 120)
-            time.sleep(2.0)
+            ctx.press('right', 80)
+            time.sleep(0.25)
+            focus = 'yes'      # Right from No is Yes (the wrap only bites from Yes)
+        if focus == 'yes':
+            ctx.press('a', 80)
+            time.sleep(0.3)
+            out['yes_pressed_at'] = time.time()
             out['confirm'] = str(ctx.shot(f'{tag}-x-confirmed'))
+            time.sleep(1.5)
+            out['confirm2'] = str(ctx.shot(f'{tag}-x-confirmed2'))
         out['left'] = _left_in_trace(ctx, start)
     else:
         for button in ('up', 'up', 'up', 'l', 'r', 'zl', 'zr'):
