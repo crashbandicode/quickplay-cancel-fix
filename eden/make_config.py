@@ -118,6 +118,16 @@ POINTS = [
                   # members 0 and 1 (stride 0x1e0; state +0x20): one capture, Eden allows 8 per point
                   {'expression': '[[[pc+0x3a73998]+8]+0x88]+0x210c0', 'type': 'bytes', 'size': 0x210},
                   {'expression': '[[[pc+0x3a73998]+8]+0x88]+0x9ff0', 'type': 'bytes', 'size': 16}]},
+    # A second 4 Hz sampler (xrm05): the waiting battle's update (.1566650, every waiting-area frame, x0 = the waiting
+    # battle object: its counter, countdown clocks, flags and state function +0x180..+0x1d7) and the service words
+    # around the round block that the first sampler doesn't reach (+0x26ad0..+0x26b4f with +0x26b04, +0x26070..,
+    # +0x26120, +0x269c0..). Service = [[0x52c4c58]+8]+0x88, pc-relative from .1566650.
+    {'target': 'main+0x1566650', 'registers': ['x0'], 'rate_limit': 4,
+     'captures': [{'expression': 'x0+0x100', 'type': 'bytes', 'size': 0x100},
+                  {'expression': '[[[pc+0x3d5e608]+8]+0x88]+0x26ad0', 'type': 'bytes', 'size': 0x80},
+                  {'expression': '[[[pc+0x3d5e608]+8]+0x88]+0x26070', 'type': 'bytes', 'size': 0x20},
+                  {'expression': '[[[pc+0x3d5e608]+8]+0x88]+0x26120', 'type': 'bytes', 'size': 8},
+                  {'expression': '[[[pc+0x3d5e608]+8]+0x88]+0x269c0', 'type': 'bytes', 'size': 0x70}]},
 ]
 
 
