@@ -355,10 +355,20 @@ def leave_waiting(ctx, tag='lw', cap_s=45):
     attempts = []
     while time.monotonic() - began < cap_s:
         ctx.check_stop()
+        # The leave can land a few seconds after the attempt's own check (qcf-srm11 m2: result 4 came 3 s after Yes,
+        # and further Plus presses at the character select readied a new search): check before pressing again.
+        if attempts and _left_in_trace(ctx, start):
+            time.sleep(8.0)
+            return _save(ctx, f'{tag}-left-{ctx.on}', {'attempts': attempts, 'late': True,
+                                                       'seconds': round(time.monotonic() - began, 1)})
         shot = ctx.shot(f'{tag}-look')
         if _menu_shown(ctx, shot) or _tab_shown(ctx, shot):
             attempt = _leave_from_menu(ctx, tag, start, shot)
             attempts.append(attempt)
+            settle = time.monotonic()
+            while not attempt['left'] and time.monotonic() - settle < 6.0:
+                time.sleep(0.5)
+                attempt['left'] = _left_in_trace(ctx, start)
             if attempt['left']:
                 time.sleep(8.0)
                 return _save(ctx, f'{tag}-left-{ctx.on}', {'attempts': attempts,
