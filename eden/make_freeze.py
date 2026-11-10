@@ -37,12 +37,24 @@ if gdb:
                    else s for s in m1['steps']]
     assert any(s.get('run') == 'steps.py:ready_peek_and_wait_session' for s in m1['steps'])
     new[5] = m1
-    # b is untraced: its search gets a fixed settle instead of the trace gate, and the rematch is followed from a
-    # (a's answer in its trace, the match in its detector); b no longer presses B through the re-entry.
-    r01 = dict(new[4])
-    r01['steps'] = [{'run': 'steps.py:ready_and_settle', 'on': 'b', 'check': True, 'args': {'tag': 'w1'}}
-                    if s.get('run') == 'steps.py:ready_and_wait_searching' else s for s in r01['steps']]
-    new[4] = r01
+    # b is untraced, so the rematch is followed from a (a's answer in its trace, the match in its detector); b no
+    # longer presses B through the re-entry.
+    # The pass criteria (primary 19:17Z): Leave Battle during the opponent's load on a first match from the CSS, and
+    # a clean leave back to the CSS. l1 replaces r01: a hosts alone, b joins a's room from the CSS, a pauses during
+    # b's load and takes Leave Battle (pause_during_join on a's own screen and trace); b stays, searching alone as
+    # host, so m1 is again a joining b's room, from the CSS.
+    def st(run, on, **args):
+        return {'run': f'steps.py:{run}', 'on': on, 'check': True, 'args': args}
+    new[4] = {'id': 'l1-host-leave', 'start': 'quickplay-menu', 'end': 'b-searching', 'budget_min': 8, 'steps': [
+        st('reach_css_tile', 'a'), {'gate': 'css-tile', 'on': 'a'}, {'play': 'pick', 'on': 'a'},
+        {'gate': 'ready-banner', 'on': 'a'}, st('ready_and_wait_searching', 'a', tag='l1w'),
+        st('reach_css_tile', 'b'), {'gate': 'css-tile', 'on': 'b'}, {'play': 'pick', 'on': 'b'},
+        {'gate': 'ready-banner', 'on': 'b'}, st('ready_only', 'b', tag='l1b'),
+        st('pause_during_join', 'a', tag='l1', join_cap_s=150, cap_s=60, leave=True, wait_p2=True),
+        st('expect_left', 'a', tag='l1')]}
+    m1 = dict(new[5])
+    m1['steps'] = [st('css_to_banner', 'a'), st('ready_peek_and_wait_session', 'a', tag='m1'), st('battle', 'a', tag='m1')]
+    new[5] = m1
     ry1 = dict(new[6])
     ry1['steps'] = [{'run': 'steps.py:wait_answered', 'on': 'a', 'check': True, 'args': {'tag': 'ry1', 'cap_s': 120}},
                     {'run': 'steps.py:rematch_match', 'on': 'a', 'check': True, 'args': {'tag': 'ry1', 'wait_s': 90}}]

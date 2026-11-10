@@ -753,7 +753,9 @@ def pause_during_join(ctx, tag='pj', join_cap_s=90, cap_s=90, leave=True, peer_h
     start, pstart = _size(path), max(0, _size(ppath) - 262144)
     out = {'tag': tag, 'peer': peer, 'looks': []}
     began = time.monotonic()
-    while time.monotonic() - began < join_cap_s:
+    # An untraced peer (the GDB stub on): its room can't be read; wait_p2 then gates on this instance's own screen.
+    untraced = not peer_host and not ppath and wait_p2
+    while not untraced and time.monotonic() - began < join_cap_s:
         ctx.check_stop()
         parents = [s['x8'] for s in _peer_list(ppath, pstart, peer_host) if s['kind'] == 'parent']
         if parents and parents[-1] == '0x8':
@@ -761,6 +763,9 @@ def pause_during_join(ctx, tag='pj', join_cap_s=90, cap_s=90, leave=True, peer_h
             break
         time.sleep(0.25)
     else:
+        if untraced:
+            out['peer_untraced'] = True
+    if not untraced and 'peer_in_room_s' not in out:
         out['outcome'] = 'none'
         _save(ctx, f'{tag}-try-leave', out)
         raise RuntimeError(f'{peer} did not get a room within {join_cap_s} s')
@@ -980,6 +985,16 @@ def ready_peek_and_wait_session(ctx, tag='m', cap_s=150, peek_cap_s=60):
                                                          'line': m.group(0), 'ready': ready, 'peek': peek})
         time.sleep(1.0)
     raise RuntimeError(f'{ctx.on}: no match session within {cap_s} s of Ready (peek {peek})')
+
+
+def expect_left(ctx, tag='l1'):
+    """The `{tag}` try must have left (the game's own leave, back to the character select); fails the row otherwise."""
+    outcome = _try_outcome(ctx, tag)
+    out = _save(ctx, f'{tag}-expect-left', {'outcome': outcome, 'where': _where(ctx.runner, ctx.on),
+                                            'shot': str(ctx.shot(f'{tag}-after-leave'))})
+    if outcome != 'left':
+        raise RuntimeError(f'{ctx.on}: {tag} outcome {outcome}, expected left: {out}')
+    return out
 
 
 def ready_and_settle(ctx, tag='w', tries=3, look_s=30.0):
