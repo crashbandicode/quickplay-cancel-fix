@@ -38,7 +38,7 @@ POINTS = {'main+0x236b4ac': 'parent', 'main+0x23191bc': 'child', 'main+0x23105bc
           'main+0x169eadc': 'mask_store_9eadc', 'main+0x1892048': 'mask_store_92048', 'main+0x1685cb0': 'send',
           'main+0x1685ac0': 'send_to', 'main+0x1566af4': 'host_round_start', 'main+0x15669c4': 'host_ready_check',
           'main+0x1564088': 'countdown_read', 'main+0x168db60': 'member_state',
-          'main+0x18512f8': 'menu_gate_verdict'}
+          'main+0x18512f8': 'menu_gate_verdict', 'main+0x1563f04': 'name_check'}
 
 
 def _size(path):
@@ -1722,11 +1722,13 @@ def _hold_watch(ctx, tag, leave, start, pstart, room_cap_s=150, cap_s=90, expect
                 out['looks'].append(dict(got, t=round(time.monotonic() - began, 2), what='leave'))
                 if got['left']:
                     break
-            elif leave or opened == 1:
+            elif not out.get('closed_after_tab'):
+                # Peek: B closes it once the tab was seen; without the tab, close it and open it again (up to 3).
                 ctx.press('b', 80)
                 time.sleep(0.4)
                 out.setdefault('closed_shot', str(ctx.shot(f'{tag}-closed')))
-        elif not menu_seen or (leave and opened < 3):
+                out['closed_after_tab'] = tab
+        elif not menu_seen or (('tab_at_s' not in out or leave) and opened < 3):
             ctx.press('plus', 80)
             time.sleep(0.9)     # the menu opens over about half a second (qcf-srm10 oj-1)
             continue
@@ -1744,6 +1746,18 @@ def _hold_watch(ctx, tag, leave, start, pstart, room_cap_s=150, cap_s=90, expect
     out['timeline'] = line
     out['reports'] = [dict(r, s=round((r['ns'] - line.get('area_ns', r['ns'])) / 1e9, 2)) for r in reports][-12:]
     out['host'] = _host_view(_trace_records(ppath, pstart), line.get('area_ns', 0) - int(5e9))
+    # The member pass's name rule (.1563f04: x26 the slot, x8 the count it loaded; 2 or more shows the name) while
+    # the report was held: the opponent's name during the hold.
+    lo = (line.get('report') or {}).get('ns', 0)
+    hi = (line.get('release') or {}).get('ns') or line.get('round_ns') or 1 << 62
+    names = {}
+    for r in _trace_records(path, start):
+        ns = int(r.get('wall_time_ns') or 0)
+        if _kind(r) == 'name_check' and lo and lo <= ns <= hi:
+            regs = r.get('registers') or {}
+            key = f"slot{int(regs.get('x26') or '0x0', 16)}"
+            names.setdefault(key, set()).add(int(regs.get('x8') or '0x0', 16) & 0xffffffff)
+    out['names_in_hold'] = {k: sorted(v) for k, v in names.items()}
     out['outcome'] = ('left' if _left_in_trace(ctx, start) else
                       'matched' if _match_in_trace(runner, on, start) else 'none')
     out['menu_seen'] = menu_seen
@@ -1786,9 +1800,11 @@ def hold_rematch(ctx, tag='hr', leave=False, cap_s=90):
     return _hold_watch(ctx, tag, leave, start, pstart, 120, cap_s)
 
 
-def expect_hold(ctx, tag='h', held=True, menu=True, tab=True, outcome=None, min_hold_s=None, strict=False):
+def expect_hold(ctx, tag='h', held=True, menu=True, tab=True, outcome=None, min_hold_s=None, name=None,
+                strict=False):
     """What the `{tag}` watch saw against what the row is for: the ready report held (or not), the menu and its tab
-    during the wait, the outcome, and a hold at least `min_hold_s` long. Recorded in `{tag}-expect-<on>.json`; with
+    during the wait, the outcome, a hold at least `min_hold_s` long, and (`name`) the opponent's name during the hold
+    (every name-rule load in it 2 or more). Recorded in `{tag}-expect-<on>.json`; with
     `strict` a mismatch fails the row here, else hold_verdict fails the boot's last row, so one mismatch doesn't stop
     the rows after it."""
     found = sorted(Path(ctx.row_dir).parent.glob(f'*/{tag}-try-leave.json'))
@@ -1796,7 +1812,9 @@ def expect_hold(ctx, tag='h', held=True, menu=True, tab=True, outcome=None, min_
     line = data.get('timeline') or {}
     got = {'held': bool(line.get('held')), 'menu': bool(data.get('menu_at_s') is not None),
            'tab': bool(data.get('tab_at_s') is not None), 'outcome': data.get('outcome'),
-           'hold_s': line.get('hold_s')}
+           'hold_s': line.get('hold_s'), 'names_in_hold': data.get('names_in_hold')}
+    loads = [c for counts in (data.get('names_in_hold') or {}).values() for c in counts]
+    got['name'] = bool(loads) and min(loads) >= 2
     bad = []
     if got['held'] != held:
         bad.append('held')
@@ -1808,6 +1826,8 @@ def expect_hold(ctx, tag='h', held=True, menu=True, tab=True, outcome=None, min_
         bad.append('outcome')
     if min_hold_s and outcome != 'left' and (got['hold_s'] or 0) < min_hold_s:
         bad.append('hold_s')
+    if name is not None and got['name'] != name:
+        bad.append('name')
     _save(ctx, f'{tag}-expect-{ctx.on}', dict(got, bad=bad))
     if bad and strict:
         raise RuntimeError(f'{ctx.on}: {tag} {bad}: {got}')

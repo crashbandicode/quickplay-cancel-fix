@@ -53,7 +53,7 @@ def held_match(tag, seconds, peer_waited_s=0, fresh=False, config=True):
     steps = ([st('set_hold', 'a', seconds=seconds)] if config else []) + (fresh_b(tag) if fresh else [])
     steps += [st('css_to_banner', 'a'),
               st('hold_join', 'a', tag=tag, leave=False, peer_waited_s=peer_waited_s),
-              st('expect_hold', 'a', tag=tag, held=True, menu=None, tab=None, outcome='matched',
+              st('expect_hold', 'a', tag=tag, held=True, menu=True, tab=True, name=True, outcome='matched',
                  min_hold_s=round(seconds * 0.9, 2)),
               st('battle', 'a', tag=tag)]
     return {'id': tag, 'start': 'b-searching', 'end': 'results', 'budget_min': 10, 'steps': steps}
@@ -63,7 +63,7 @@ def rematch_leave(tag):
     return {'id': tag, 'start': 'results', 'end': 'b-searching', 'budget_min': 6, 'steps': [
         st('wait_answered', 'a', tag=tag, cap_s=120),
         st('hold_rematch', 'a', tag=tag, leave=True),
-        st('expect_hold', 'a', tag=tag, held=True, menu=True, tab=True, outcome='left'),
+        st('expect_hold', 'a', tag=tag, held=True, menu=True, tab=True, name=True, outcome='left'),
         st('where_are', 'a', tag=f'{tag}-after', wait_s=6.0),
         st('ensure_searching', 'b', tag=f'{tag}-bw')]}
 
@@ -81,14 +81,15 @@ new += [
             "character select and joins b's room; during the hold Pause has Leave Battle; Yes, and back to the "
             "character select (no match follows); raw take",
             [st('hold_join', 'a', tag='h3l', leave=True)]),
-        st('expect_hold', 'a', tag='h3l', held=True, menu=True, tab=True, outcome='left'),
+        st('expect_hold', 'a', tag='h3l', held=True, menu=True, tab=True, name=True, outcome='left'),
         st('where_are', 'a', tag='h3l-after', wait_s=6.0),
         st('ensure_searching', 'b', tag='h3l-bw')]},
     held_match('h3', 3, fresh=True, config=False),
     {'id': 'ry3', 'start': 'results', 'end': 'results', 'budget_min': 9, 'steps': [
         st('wait_answered', 'a', tag='ry3', cap_s=120),
         st('hold_rematch', 'a', tag='ry3', leave=False),
-        st('expect_hold', 'a', tag='ry3', held=True, menu=None, tab=None, outcome='matched', min_hold_s=2.7),
+        st('expect_hold', 'a', tag='ry3', held=True, menu=True, tab=True, name=True, outcome='matched',
+           min_hold_s=2.7),
         st('battle', 'a', tag='ry3')]},
     rematch_leave('ry3l'),
     held_match('h6p', 6, peer_waited_s=45),
