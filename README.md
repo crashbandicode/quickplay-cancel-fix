@@ -33,15 +33,15 @@ room.
 
 The Leave Battle tab, the dialog and the leave are the game's own.
 
-**Before** (joining a room, hold off):
+**Before** (joining a room, no plugin):
 
-![Before: joining a room, Leave Battle is there briefly, but "Get Ready" closes the dialog and the match starts](docs/media/before.gif)
+![Before: joining a room without the plugin, "Get Ready" at once, Pause opens nothing, and the match starts](docs/media/before.gif)
 
-*Eden, 2026-11-10, run `qcf-xhd4` row `h0`, 0.3.0 with `hold_seconds=0`
-(the hold off). The console has joined another console's room from the
-character select. Pause, Leave Battle, and "Would you like to leave the
-game?" come up. Both players are "Ready!", "Get Ready" closes the dialog,
-and the match goes on.*
+*Eden, 2026-11-11, run `qcf-shv1`, no plugin on either console. The console
+has joined another console's room from the character select. Both players
+are "Ready!" as soon as the waiting area appears, and "Get Ready" comes at
+once. Pause, pressed four times, opens nothing, and the match starts with
+no way out.*
 
 **After** (joining a room, the 3 s hold):
 
@@ -82,6 +82,8 @@ was also played on a Switch.
 - **Matches after a hold**, including a rematch after a held match, played
   to their end on both consoles with no desync (time-out, then the sudden
   death).
+- **Joining without the plugin:** "Get Ready" came as soon as the waiting
+  area appeared. Pause opened nothing, and the match started.
 - **Hosting from the character select** (0.2.1): Leave Battle while the
   opponent loaded, Yes back to the character select. The rematch match after
   a first match played to its end (v0.2.0 froze the opponent there).
@@ -97,12 +99,13 @@ install line goes to `sd:/ultimate/quickplay-cancel-fix/events.log`.
 `sd:/ultimate/quickplay-cancel-fix/config.ini` (optional):
 
 ```ini
-hold_seconds=3
+hold_seconds=5
 ```
 
 - How long a joined Quickplay match holds your "Ready!": 0.5 to 10 seconds
   (values outside are clamped). `0` turns the hold off.
-- Without the file, the hold is 3 s.
+- **Recommended: 5.** Without the file the hold is 3 s, which leaves about
+  3 s for Pause, Up, A, Right, A (see Known limits).
 - The file is read each time you join a match, so a change applies to the
   next one.
 
@@ -110,7 +113,7 @@ hold_seconds=3
 
 - **The hold runs while the menu is open.** With the default 3 s, Pause, Up,
   A, Right, A has to be done within about 3 s of the waiting area appearing.
-  If that's too tight, raise `hold_seconds`; 5 is comfortable.
+  `hold_seconds=5` gives room for it.
 - **A hold always ends:** after the configured time, a started round or a
   leave, or after 10 s in which the menu couldn't open. So the host never
   waits on it for more than the hold plus 10 s.

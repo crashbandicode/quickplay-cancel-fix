@@ -65,14 +65,27 @@ and logs stay with each run under its label (`/home/intpa/eden-runs/<label>/out`
 
 ### README GIFs (0.3.0)
 
-- Both clips come from `qcf-xhd4`, a's screen, 1280×720: the runner's raw takes, trimmed with `tools/gif_trim.py` (frame
-  durations kept).
-- `after.gif`: row `h3l`, 0.3–7.0 s of the take, 6.7 s.
+- Both clips are the joining console's screen (a), 1280×720: the runner's raw takes, trimmed with
+  `tools/gif_trim.py` (frame durations kept).
+- `after.gif`: `qcf-xhd4` row `h3l` (0.3.0, the 3 s hold), 0.3–7.0 s of the take, 6.7 s.
   - Frames: the waiting area fading in; Pause with Leave Battle; Leave Battle focused (a "Preparing…", the opponent
     "Joined!"); "Would you like to leave the game?" on No, then Yes; then the load back.
-- `before.gif`: row `h0`, 0.3–8.6 s, 8.3 s.
-  - Frames: Pause with Leave Battle; the dialog on No; both players "Ready!" and "Get Ready", with the dialog gone; the
-    room fighting on until the match.
+- `before.gif`: `qcf-shv1` row `vb` (2026-11-11, **no plugin on either console**), 0.4–9.8 s, 9.4 s.
+  - The 0.3.0 release first carried a take of 0.3.0 with the hold off (`qcf-xhd4` row `h0`). That isn't the game
+    without the plugin: 0.3.0 still offers a brief Leave Battle there. It was replaced (the operator's correction,
+    2026-11-11).
+  - Frames: the waiting area with both players "Ready!" (the opponent "???"), "Get Ready" at once, "Closed" slots,
+    "Fight Time", the load, and the match's VS screen.
+  - a pressed Pause four times (1.2, 2.6, 3.9 and 5.3 s after its ready report), and no menu opened.
+
+### `qcf-shv1`: the joiner without the plugin (Surface, 2026-11-11, 8 of 8 rows)
+
+- Both instances had no QCF build (detector and tile cursor only). LAN TLS was off, a group of its own.
+- b searched alone. a joined b's room from the character select and reported 6, then 7, at its waiting area's start
+  (natively, from `.151b048`).
+- The room went to "Get Ready" at once. a's Pause presses opened nothing (no menu in any look). The match started
+  6.6 s after a's waiting area and played to its end on both consoles (frame 7521, `desync_seen=0`).
+- Down 00:26:11Z, released.
 
 ## 0.2.1 (2026-11-10)
 
