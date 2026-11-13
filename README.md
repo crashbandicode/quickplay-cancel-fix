@@ -61,14 +61,14 @@ consoles, one with the plugin.
 - **On a Switch:** 0.2.1 was installed and played on the operator's console
   on 2026-11-10 (its release `manifest.json`). 0.3.0 has been on that card
   since 2026-11-10 23:55Z, with `hold_seconds=5`; as of 2026-11-13 no play
-  of the hold is recorded, and v0.3.0 is still a Forgejo pre-release.
+  of the hold is recorded. v0.3.0 has been a full release since 2026-11-13.
 
 ## Install
 
 Copy `libquickplay_cancel_fix.nro` to
 `sd:/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/`, from
 [v0.3.0](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.3.0)
-(pre-release, the joiner's hold) or
+(the joiner's hold) or
 [v0.2.1](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.2.1)
 (the host side and the names, no hold). The install line goes to
 `sd:/ultimate/quickplay-cancel-fix/events.log`.
