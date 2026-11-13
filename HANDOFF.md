@@ -1,5 +1,19 @@
 # Handoff: quickplay-cancel-fix
 
+## Doc check — 2026-11-13
+
+- **`main`** is `bbe4661` (2026-11-11 00:28Z), one commit after this handoff: `before.gif` is now the joiner with no
+  plugin on either console (`qcf-shv1`), and the README recommends `hold_seconds=5`.
+- **Forgejo:** `main` and the tags `v0.2.1`, `v0.3.0` only (`git ls-remote origin`); `v030-hold` is not there, and
+  v0.2.0's tag and release are gone (withdrawn). v0.3.0 is still a pre-release (releases API). The GitHub mirror's
+  `main` is the same sha.
+- **Card:** 0.3.0 `d69f11cf` installed 2026-11-10 23:55:56Z and `config.ini` with `hold_seconds=5` at 23:56:11Z
+  (`smash-training-lobby/artifacts/card-install-qcf-0.3.0/`); `d69f11cf` is still in the 2026-11-12 22:26Z readback
+  (`card-install-detector-0.5.1/verify/`). No Switch play of the hold is recorded as of this date.
+- The section below is the 2026-11-10 handoff, unchanged except for this note.
+
+## 2026-11-10
+
 Updated 2026-11-10 23:55Z (Get-Date). Playbook followed: `ssbu-mod-playbook` `4ca80e1`.
 
 - **Branch / commit:** `main`, fast-forwarded to `v030-hold`.

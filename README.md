@@ -6,32 +6,9 @@
 
 A Skyline plugin for Super Smash Bros. Ultimate 13.0.5. It gives you a
 chance to leave a Quickplay match before it starts, from either side of the
-room.
-
-- **As the host** (you wait, an opponent joins): in the lobby you enter from
-  the character select, the game doesn't let you leave while the opponent is
-  loading in. The lobby after a "Rematch?" Yes does: Pause, Leave Battle,
-  Yes. With this plugin the lobby from the character select behaves like the
-  rematch lobby.
-  - The game keeps a count of the battles played per player in the room. It
-    offers the leave only when your own count is 2 or more, and resets the
-    count to 1 when you come from the character select.
-  - The plugin sets your own count from 1 to 2 while you wait in that lobby,
-    and puts the 1 back when the lobby ends. So after each battle your
-    console counts every player exactly as your opponent's console does.
-- **As the joiner** (since 0.3.0): when your loading screen ends, your
-  console reports "Ready!" at once. If the host is already waiting, the room
-  goes to "Get Ready" within a second or two, and from then on Pause doesn't
-  open.
-  - The plugin holds your "Ready!" for a few seconds (3 by default) when you
-    join a Quickplay room. The opponent sees you as "Preparing…", and Pause
-    has Leave Battle.
-  - When the hold ends, the plugin reports "Ready!" through the game's own
-    call, and the match starts as usual. Leaving ends the hold.
-- **Names:** the game shows "???" for a player you haven't played yet. The
-  plugin shows the opponent's name instead.
-
-The Leave Battle tab, the dialog and the leave are the game's own.
+room: as the host while the opponent loads in, and as the joiner for a few
+seconds after you arrive. The Leave Battle tab, the dialog and the leave are
+the game's own.
 
 **Before** (joining a room, no plugin):
 
@@ -52,47 +29,49 @@ no way out.*
 The console stays "Preparing…", so the room never reaches "Get Ready". Yes
 leaves, and the load back to the character select starts.*
 
-- **Quickplay only:** it acts only in online Quickplay. Other online modes
-  and offline play are left alone. As the host, nothing is held.
-- **Guarded hooks:** four hooks: the lobby's frame, the lobby's name check,
-  the "Ready!" report and the leave. It installs only on 13.0.5, with the
-  hooked instructions and the game code it relies on unchanged. Another
-  plugin's hook on the same instruction is chained onto.
-- **What it changes:**
-  - your own battle count, 1 to 2, while you wait in a lobby from the
-    character select;
-  - what the name check reads for an opponent you haven't played yet;
-  - as the joiner, when your "Ready!" goes out: the same report, through the
-    game's own call, a few seconds later.
-  - No message of its own is sent and no input is made. No heap use, no
-    thread.
+## What it does
 
-**Tested** ([evidence](docs/EVIDENCE.md)): Eden, 2026-11-10, 13.0.5 on LAN
-Online, two consoles (one with the plugin, one without). 0.2.1's host side
-was also played on a Switch.
+- **As the host** (you wait, an opponent joins): the lobby you enter from the
+  character select lets you leave while the opponent loads in (Pause, Leave
+  Battle, Yes), as the lobby after a "Rematch?" Yes already does.
+- **As the joiner** (since 0.3.0): your console says "Ready!" a few seconds
+  later than usual (3 by default). Meanwhile the opponent sees you as
+  "Preparing…" and Pause has Leave Battle. Then the match starts as usual.
+- **Names:** the opponent's name shows instead of "???".
+- **Quickplay only:** local wireless, other online modes and offline play are
+  left alone.
 
-- **Joining, held 3, 6 and 10 s:** in every held lobby, Pause showed Leave
-  Battle and the opponent's name 1.2–1.6 s after the waiting area appeared.
-  - The host saw the joiner as "Preparing…" for the whole hold.
-  - Yes went back to the character select (4 of 4, from the character select
-    and after a rematch). The host saw "Later!" and kept searching.
-  - With no leave, the match started after the hold, with no kick or time-out.
-    That held at 10 s, and at 6 s against a host 72 s into its room, past its
-    countdown.
-- **Matches after a hold**, including a rematch after a held match, played
-  to their end on both consoles with no desync (time-out, then the sudden
-  death).
-- **Joining without the plugin:** "Get Ready" came as soon as the waiting
-  area appeared. Pause opened nothing, and the match started.
+How it does this, and what it changes in the game:
+[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
+
+## Tested
+
+[Evidence](docs/EVIDENCE.md): Eden, 2026-11-10, 13.0.5 over LAN Online, two
+consoles, one with the plugin.
+
+- **Joining, held 3, 6 and 10 s:** Pause showed Leave Battle and the
+  opponent's name 1.2–1.6 s after the waiting area appeared. Leaving went
+  back to the character select 4 of 4 times; with no leave the match started
+  after the hold, with no kick or time-out.
+- **Matches after a hold**, a rematch after a held match included, played
+  to their end on both consoles with no desync.
 - **Hosting from the character select** (0.2.1): Leave Battle while the
-  opponent loaded, Yes back to the character select. The rematch match after
-  a first match played to its end (v0.2.0 froze the opponent there).
+  opponent loaded, Yes back to the character select, and the rematch match
+  after it played to its end.
+- **On a Switch:** 0.2.1 was installed and played on the operator's console
+  on 2026-11-10 (its release `manifest.json`). 0.3.0 has been on that card
+  since 2026-11-10 23:55Z, with `hold_seconds=5`; as of 2026-11-13 no play
+  of the hold is recorded, and v0.3.0 is still a Forgejo pre-release.
 
 ## Install
 
 Copy `libquickplay_cancel_fix.nro` to
-`sd:/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/`. The
-install line goes to `sd:/ultimate/quickplay-cancel-fix/events.log`.
+`sd:/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/`, from
+[v0.3.0](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.3.0)
+(pre-release, the joiner's hold) or
+[v0.2.1](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.2.1)
+(the host side and the names, no hold). The install line goes to
+`sd:/ultimate/quickplay-cancel-fix/events.log`.
 
 ## Settings
 
@@ -122,7 +101,6 @@ hold_seconds=5
   isn't remembered.
 - **The install line** ends `other_hook=member_test`. That's the plugin's own
   name hook overlapping a code check, not another plugin.
-- Tested in Eden over LAN. The hold itself hasn't been played on a Switch yet.
 
 ## Build
 

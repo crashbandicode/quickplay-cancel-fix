@@ -1,5 +1,11 @@
 # Compliance report: quickplay-cancel-fix
 
+2026-11-10, v0.2.0 (`669f5d9`). 2026-11-13 note: v0.2.0 was withdrawn the same day; its tag and release no longer
+exist, and v0.2.1 replaced it. The "Card" row below was true when written (gates at 08:32Z); 0.2.0 was installed
+later that day, at 11:45Z on the operator's order, and removed at 17:42Z
+(`smash-training-lobby/artifacts/card-install-qcf-0.2.0/`, `card-remove-qcf-0.2.0/`). The release rows describe a
+release that is gone.
+
 | Requirement | Tag | Result | Evidence |
 | --- | --- | --- | --- |
 | crate-type is ["cdylib"] only (no rlib) | M | pass | Cargo.toml crate-type = ['cdylib'] |

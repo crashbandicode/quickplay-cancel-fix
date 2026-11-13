@@ -7,6 +7,9 @@ and logs stay with each run under its label (`/home/intpa/eden-runs/<label>/out`
 
 - **Build:** release NRO `d69f11cf17c618a11b86ee7373c5b786af0d53222dce0a8cb998da6bbe1da9e8` (53,248 B), rebuilt
   byte-identical from the tag.
+- **Card** (2026-11-13 note): installed 2026-11-10 23:55:56Z with `config.ini` `hold_seconds=5`
+  (`smash-training-lobby/artifacts/card-install-qcf-0.3.0/`), still there at the 2026-11-12 22:26Z readback. No
+  Switch play of the hold is recorded yet; v0.3.0 is still a Forgejo pre-release.
   - Gates: `cargo test` 41, `cargo clippy --all-targets -- -D warnings`, `--no-default-features`, the release and diag
     builds.
 - **Setup:** Eden on the XPS, two instances of 13.0.5 playing Quickplay against each other over LAN Online (TLS on, a
@@ -104,6 +107,10 @@ and logs stay with each run under its label (`/home/intpa/eden-runs/<label>/out`
   - Each console's opponent was its own pair partner (the runtime's `[lanstations]` PIDs).
 
 ## 0.2.0 (2026-11-10, withdrawn)
+
+2026-11-13 note: v0.2.0's tag and Forgejo release no longer exist; v0.2.1 replaced it. 0.2.0 (`0b12208d…`) was on the
+card from 2026-11-10 11:45Z to 17:42Z (`card-install-qcf-0.2.0/`, `card-remove-qcf-0.2.0/removal.json`). Its tag
+commit `669f5d9` is in `main`.
 
 2026-11-10. Eden on one host (the XPS), two instances of Super Smash Bros.
 Ultimate 13.0.5 playing Quickplay against each other over LAN Online (TLS
