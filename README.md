@@ -65,6 +65,8 @@ consoles, one with the plugin.
 
 ## Install
 
+Tested on: Super Smash Bros. Ultimate 13.0.5 · Switch firmware 23.5.0 · Atmosphère 1.12.2
+
 Copy `libquickplay_cancel_fix.nro` to
 `sd:/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/`, from
 [v0.3.0](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.3.0)
