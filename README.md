@@ -52,8 +52,7 @@ no way out.*
 The console stays "Preparing…", so the room never reaches "Get Ready". Yes
 leaves, and the load back to the character select starts.*
 
-- **Quickplay only:** it acts only in online Quickplay. Other online modes
-  and offline play are left alone. As the host, nothing is held.
+- **Quickplay only:** it acts only in online Quickplay, Elite Smash included (since 0.3.1). Other online modes and offline play are left alone. As the host, nothing is held.
 - **Guarded hooks:** four hooks: the lobby's frame, the lobby's name check,
   the "Ready!" report and the leave. It installs only on 13.0.5, with the
   hooked instructions and the game code it relies on unchanged. Another
@@ -123,6 +122,7 @@ hold_seconds=5
 - **The install line** ends `other_hook=member_test`. That's the plugin's own
   name hook overlapping a code check, not another plugin.
 - Tested in Eden over LAN. The hold itself hasn't been played on a Switch yet.
+- **Elite Smash** (0.3.1) is host-tested only: the Eden pairs ran plain Quickplay, and it hasn't been played on a Switch yet.
 
 ## Build
 

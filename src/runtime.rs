@@ -174,7 +174,7 @@ unsafe extern "C" fn ready_report(ctx: &mut InlineCtx) {
     );
     let mode = read_u32(base() + model::MODE as u64);
     // The hold is read from the config for each joined Quickplay match, so a change applies to the next one.
-    let limit = (role == hold::Role::Joiner && mode == model::QUICKPLAY).then(read_hold);
+    let limit = (role == hold::Role::Joiner && model::quickplay_room(mode)).then(read_hold);
     if let Some((report, result)) = with_gate(|gate| {
         if let Some(limit) = limit {
             gate.set_limit(limit);
@@ -264,7 +264,7 @@ unsafe extern "C" fn wait_frame(ctx: &mut InlineCtx) {
         slot => Some(slot as usize).filter(|s| *s < model::SLOTS),
     };
     let mode = read_u32(base() + model::MODE as u64);
-    if raised.is_none() && mode != model::QUICKPLAY {
+    if raised.is_none() && !model::quickplay_room(mode) {
         return;
     }
     let context = ctx.registers[model::WAIT_CONTEXT_REGISTER].x();
@@ -296,7 +296,7 @@ static SHOWN: u32 = model::REMATCH_COUNT;
 /// word or two and returns.
 unsafe extern "C" fn names_load(ctx: &mut InlineCtx) {
     let mode = read_u32(base() + model::MODE as u64);
-    if mode != model::QUICKPLAY {
+    if !model::quickplay_room(mode) {
         return;
     }
     let slot = ctx.registers[model::GATE_SLOT_REGISTER].x() as usize;
