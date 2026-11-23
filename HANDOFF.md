@@ -1,5 +1,21 @@
 # Handoff: quickplay-cancel-fix
 
+## 0.3.1 — 2026-11-23
+
+- **`main`** is the merge of `elite-mode`; tag `v0.3.1` is on it. Playbook followed: `ssbu-mod-playbook` `b49b4e1`.
+- **0.3.1 = 0.3.0 + Elite Smash rooms:** one test, `model::quickplay_room`, replaces the six checks of the mode word:
+  `0x07010101` (plain Quickplay) or `0x07010400` (Elite Smash). No hook site, guard or game call changed.
+- **Build:** release NRO `a73eb183b114d3cc…` (53,248 B). Gates on a build host: `cargo test` (44), clippy,
+  `--no-default-features`, the release and diag builds. No cargo runs on the Surface.
+- **Card:** 0.3.1 replaced 0.3.0 on 2026-11-23 at 21:57Z. The operator played Elite Smash with it: names and icons
+  show.
+- **Evidence:** [docs/EVIDENCE.md](docs/EVIDENCE.md), section 0.3.1.
+- **Open:**
+  - no Eden run of an Elite Smash room exists: both profiles would need a rating at or above the game's threshold;
+  - on 0.3.0, Leave Battle was reported as already offered in Elite Smash rooms; that is not explained;
+  - no Switch play of the hold is recorded.
+- The sections below are the earlier handoffs, unchanged.
+
 ## Doc check — 2026-11-13
 
 - **`main`** is `bbe4661` (2026-11-11 00:28Z), one commit after this handoff: `before.gif` is now the joiner with no

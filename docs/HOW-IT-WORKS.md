@@ -1,7 +1,7 @@
 # How it works
 
 2026-11-13. Moved from the README and checked against `src/` at `bbe4661` (0.3.0). The measurements behind it are
-in [EVIDENCE.md](EVIDENCE.md).
+in [EVIDENCE.md](EVIDENCE.md). "Where it acts" was updated for 0.3.1 on 2026-11-23.
 
 ## As the host
 
@@ -47,6 +47,10 @@ in [EVIDENCE.md](EVIDENCE.md).
 
 ## Where it acts
 
-- Everything checks the game's mode word (`0x53050f0`) for Quickplay's `0x07010101`. Other online modes, local
-  wireless and offline play are left alone; an Eden local-wireless room logged `mode=0x02010000` (TrainingRooms' log in
-  `a-ldn-fix020t-0c628724`, 2026-11-12). The plugin has not been run in local wireless.
+- Everything checks the game's mode word (`0x53050f0`) with one test (`model::quickplay_room`): plain Quickplay's
+  `0x07010101` or, since 0.3.1, Elite Smash's `0x07010400`. The game's Quickplay sequence (`.2369430`) puts the second
+  in place of the first when the own fighter passes its Elite test (`.17048f0`), and the game's own "???" rule
+  (`.1563f38`) covers both. 0.3.0 and 0.2.1 checked for `0x07010101` only, so they did nothing in an Elite Smash room.
+- Other online modes, local wireless and offline play are left alone; an Eden local-wireless room logged
+  `mode=0x02010000` (TrainingRooms' log in `a-ldn-fix020t-0c628724`, 2026-11-12). The plugin has not been run in local
+  wireless.

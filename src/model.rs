@@ -270,6 +270,32 @@ pub const NO_STATION: u8 = 0xff;
 /// The online-mode word, and Quickplay's value in it.
 pub const MODE: usize = 0x5305000 + 0xf0;
 pub const QUICKPLAY: u32 = 0x0701_0101;
+/// Elite Smash; the Quickplay sequence sets it in place of `QUICKPLAY` when the own fighter passes the game's Elite test (`.17048f0`).
+pub const ELITE: u32 = 0x0701_0400;
+
+/// A room this plugin acts in, plain Quickplay or Elite Smash. The word is compared whole, as the game's own name rule
+/// does (`MODE_READ`), so 0x0701_0102, 0x0701_0800 and values with bit 31 set are not rooms.
+pub const fn quickplay_room(mode: u32) -> bool {
+    matches!(mode, QUICKPLAY | ELITE)
+}
+
+#[cfg(test)]
+pub(crate) const MODES: [(u32, bool); 14] = [
+    (QUICKPLAY, true),
+    (ELITE, true),
+    (0, false),
+    (0x0701_0100, false),
+    (0x0701_0102, false),
+    (0x0701_0200, false),
+    (0x0701_0401, false),
+    (0x0701_0600, false),
+    (0x0701_0800, false),
+    (0x0201_0000, false),
+    (0x0202_0000, false),
+    (0x0404_0000, false),
+    (0x8701_0101, false),
+    (0x8701_0400, false),
+];
 
 /// The per-slot battle counts and stations.
 pub const SLOTS: usize = 8;
@@ -308,7 +334,7 @@ pub fn own_slot_in(members: &[u8; SLOTS], slots: &[u8; SLOTS], mine: u8) -> Opti
 /// a character-select entry's fresh 1 becomes the rematch path's 2; anything
 /// else (a rematch lobby's 2 or more, an unset 0) stays.
 pub fn adopt(mode: u32, count: u32) -> Option<u32> {
-    (mode == QUICKPLAY && count == FRESH_COUNT).then_some(REMATCH_COUNT)
+    (quickplay_room(mode) && count == FRESH_COUNT).then_some(REMATCH_COUNT)
 }
 
 /// The count to put back into a slot this plugin raised, when the waiting
@@ -325,7 +351,7 @@ pub fn restore(count: u32) -> Option<u32> {
 /// stored value. The stored counts are not written.
 pub fn shown(mode: u32, slot: usize, own: Option<usize>, count: u32) -> Option<u32> {
     let opponent = own.is_some_and(|own| own != slot);
-    (mode == QUICKPLAY && opponent && count < REMATCH_COUNT).then_some(REMATCH_COUNT)
+    (quickplay_room(mode) && opponent && count < REMATCH_COUNT).then_some(REMATCH_COUNT)
 }
 
 /// One waiting-area frame: the slot the plugin raised and has not put back
@@ -467,6 +493,12 @@ mod tests {
         assert_eq!(adrp_page(&MODE_READ, 0) + ldst_offset(MODE_READ.stock()[1]), MODE);
         let quickplay_low = 0u32.wrapping_sub(0xf8fe_feff);
         assert_eq!(quickplay_low, QUICKPLAY);
+        let mode_read = MODE_READ.stock();
+        assert_eq!(mode_read[11], 0x5280_8009);
+        assert_eq!(mode_read[12], 0x72a0_e029);
+        let lo = (mode_read[11] >> 5) & 0xffff;
+        let hi = (mode_read[12] >> 5) & 0xffff;
+        assert_eq!((hi << 16) | lo, ELITE);
         // member_test: adrp x0, 0x5308000; add x0, x0, #0x760; mov w1, w26; bl .179ed00; then the count load (GATE)
         let test = MEMBER_TEST.stock();
         assert_eq!(adrp_page(&MEMBER_TEST, 0) + ((test[1] >> 10) & 0xfff) as usize, MEMBER_TABLE);
@@ -571,7 +603,7 @@ mod tests {
             assert_eq!(adopt(QUICKPLAY, count), None, "count {count}");
         }
         // Other online modes and offline: untouched.
-        for mode in [0, 0x0701_0102, 0x0701_0400, 0x0701_0800, 0x0202_0000] {
+        for mode in [0, 0x0701_0102, 0x0701_0800, 0x0202_0000] {
             assert_eq!(adopt(mode, 1), None, "mode {mode:#x}");
         }
         // Writing it again on the next frame changes nothing.
@@ -696,7 +728,7 @@ mod tests {
             assert_eq!(shown(QUICKPLAY, own, Some(own), FRESH_COUNT), None);
             assert_eq!(shown(QUICKPLAY, slot, None, FRESH_COUNT), None);
         }
-        for mode in [0, 0x0701_0102, 0x0701_0400, 0x0701_0800, 0x0202_0000] {
+        for mode in [0, 0x0701_0102, 0x0701_0800, 0x0202_0000] {
             assert_eq!(shown(mode, 0, Some(1), FRESH_COUNT), None, "mode {mode:#x}");
         }
     }
@@ -785,7 +817,7 @@ mod tests {
         }
         // Not Quickplay: nothing.
         let counts = [FRESH_COUNT; SLOTS];
-        assert_eq!(frame(None, 0x0701_0400, Some(0), &counts, false), (None, None));
+        assert_eq!(frame(None, 0x0701_0102, Some(0), &counts, false), (None, None));
         // The slot changed under a raise (a new character-select entry): dropped, not restored.
         assert_eq!(frame(Some(0), QUICKPLAY, Some(0), &counts, false), (None, None));
         let mut counts = [FRESH_COUNT; SLOTS];
@@ -815,6 +847,56 @@ mod tests {
                 assert_eq!(a, v, "battle {battle}: a counts as a console without the plugin");
                 assert_eq!(a[own], FRESH_COUNT + battle);
             }
+        }
+    }
+
+    #[test]
+    fn a_quickplay_room_is_plain_quickplay_or_elite_smash() {
+        for (mode, room) in MODES {
+            assert_eq!(quickplay_room(mode), room, "{mode:#x}");
+            assert_eq!(adopt(mode, FRESH_COUNT).is_some(), room, "{mode:#x}");
+            assert_eq!(shown(mode, 0, Some(1), FRESH_COUNT).is_some(), room, "{mode:#x}");
+            let expected = if room { (Some(0), Some((0, REMATCH_COUNT))) } else { (None, None) };
+            assert_eq!(frame(None, mode, Some(0), &[FRESH_COUNT; SLOTS], false), expected, "{mode:#x}");
+        }
+    }
+
+    #[test]
+    fn elite_smash_is_treated_exactly_as_quickplay() {
+        for count in 0..=4 {
+            assert_eq!(adopt(ELITE, count), adopt(QUICKPLAY, count), "{count}");
+        }
+        for slot in 0..4 {
+            for own in [None, Some(0), Some(1), Some(2), Some(3)] {
+                for count in 0..=4 {
+                    assert_eq!(shown(ELITE, slot, own, count), shown(QUICKPLAY, slot, own, count),
+                        "slot={slot} own={own:?} count={count}");
+                }
+            }
+        }
+        for raised in [None, Some(0), Some(1)] {
+            for own in [None, Some(0), Some(1)] {
+                for first in 0..=3 {
+                    for second in 0..=3 {
+                        let mut counts = [FRESH_COUNT; SLOTS];
+                        counts[0] = first;
+                        counts[1] = second;
+                        for exiting in [false, true] {
+                            assert_eq!(frame(raised, ELITE, own, &counts, exiting),
+                                frame(raised, QUICKPLAY, own, &counts, exiting),
+                                "raised={raised:?} own={own:?} counts={first},{second} exiting={exiting}");
+                        }
+                    }
+                }
+            }
+        }
+        for (start, next) in [(QUICKPLAY, ELITE), (ELITE, QUICKPLAY)] {
+            let mut counts = [FRESH_COUNT; SLOTS];
+            let (raised, write) = frame(None, start, Some(0), &counts, false);
+            assert_eq!((raised, write), (Some(0), Some((0, REMATCH_COUNT))));
+            counts[0] = REMATCH_COUNT;
+            assert_eq!(frame(raised, next, Some(0), &counts, false), (Some(0), None));
+            assert_eq!(frame(raised, next, Some(0), &counts, true), (None, Some((0, FRESH_COUNT))));
         }
     }
 

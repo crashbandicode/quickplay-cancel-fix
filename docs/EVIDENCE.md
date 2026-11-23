@@ -3,6 +3,22 @@
 Newest version first. Eden runs are driven by the playbook's Eden runner from a `rows.json`. The receipts, frames
 and logs stay with each run under its label (`/home/intpa/eden-runs/<label>/out` on the host named).
 
+## 0.3.1: Elite Smash rooms (2026-11-23)
+
+- **Change:** the name, the count raise and the hold also act when the mode word is Elite Smash's `0x07010400`
+  (`model::quickplay_room`). 0.3.0 and 0.2.1 acted only on plain Quickplay's `0x07010101`. Nothing else changed.
+- **Build:** release NRO `a73eb183b114d3cc6c80927bf111dd6e41881f67f8be1ca01f2c4260841ec134` (53,248 B), rebuilt
+  byte-identical from the tag. Its text, rodata, data and bss sizes equal 0.3.0's.
+  - Gates, on a build host: `cargo test` 44, `cargo clippy --all-targets -- -D warnings`, `--no-default-features`, the
+    release and diag builds.
+  - The three new mode tests fail against 0.3.0's checks (41 passed, 3 failed, each on `0x07010400`) and pass with the
+    change.
+- **On a Switch:** installed on the operator's card on 2026-11-23 at 21:57Z, replacing 0.3.0. The operator played
+  Elite Smash with it that day: opponents' names and icons show instead of "???". No log or capture of that play is
+  kept.
+- **Not run:** no Eden run of an Elite Smash room; the LAN pairs run plain Quickplay. The count raise and the hold in
+  Elite Smash are covered by the host tests only. Play with no desync is shown for plain Quickplay (0.3.0, below).
+
 ## 0.3.0: the joiner's ready hold (2026-11-10)
 
 - **Build:** release NRO `d69f11cf17c618a11b86ee7373c5b786af0d53222dce0a8cb998da6bbe1da9e8` (53,248 B), rebuilt

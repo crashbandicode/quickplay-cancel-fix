@@ -14,7 +14,7 @@
 //! frames in which the waiting menu can open count. Leaving the waiting area
 //! drops the hold. The host is untouched: it waits for a member below 7.
 
-use crate::model::{Kind, Site, QUICKPLAY};
+use crate::model::{quickplay_room, Kind, Site};
 
 /// The waiting area's ready report: `bl .168db60` with x0 = the online service
 /// and w1 = 7, in the task (vtable `0x506d4d8`, slot 2 `.151af50`) PracticeScene
@@ -237,7 +237,7 @@ impl Gate {
         }
         // A new waiting area: a hold from an earlier one (left some other way) ends.
         let stale = self.held.take().map(|_| Note::DroppedStale);
-        if mode != QUICKPLAY || self.limit == 0 {
+        if !quickplay_room(mode) || self.limit == 0 {
             return (state, stale);
         }
         match role {
@@ -333,6 +333,7 @@ pub fn leave_window(countdown_out: bool, tick: u32, hold: u32) -> u32 {
 mod tests {
     use super::*;
     use crate::chain;
+    use crate::model::{ELITE, QUICKPLAY};
 
     fn bl_target(site: &Site, i: usize) -> usize {
         let word = site.stock()[i];
@@ -406,7 +407,7 @@ mod tests {
             assert!(!gate.holding());
         }
         // Other modes, other states, and the hold turned off: native.
-        for mode in [0, 0x0701_0102, 0x0701_0400, 0x0701_0800] {
+        for mode in [0, 0x0701_0102, 0x0701_0800] {
             assert_eq!(gate.ready(READY_STATE, Role::Joiner, mode), (READY_STATE, None), "{mode:#x}");
         }
         assert_eq!(gate.ready(LOADING_STATE, Role::Joiner, QUICKPLAY), (LOADING_STATE, None));
@@ -425,6 +426,31 @@ mod tests {
             assert_eq!(gate.tick(false, true), (Tick::Release, Some(Note::Released)));
             assert_eq!(gate.tick(false, true), (Tick::Idle, None));
         }
+    }
+
+    #[test]
+    fn a_join_is_held_in_plain_quickplay_and_elite_smash_only() {
+        for (mode, room) in crate::model::MODES {
+            let mut gate = Gate::new(DEFAULT_HOLD);
+            let expected = if room { (LOADING_STATE, Some(Note::HeldAsJoiner)) } else { (READY_STATE, None) };
+            assert_eq!(gate.ready(READY_STATE, Role::Joiner, mode), expected, "{mode:#x}");
+            assert_eq!(gate.holding(), room, "{mode:#x}");
+        }
+        for (role, note) in [(Role::Host, Note::NativeAsHost), (Role::NoRoom, Note::NativeNoRoom)] {
+            let mut gate = Gate::new(DEFAULT_HOLD);
+            assert_eq!(gate.ready(READY_STATE, role, ELITE), (READY_STATE, Some(note)));
+        }
+        assert_eq!(Gate::new(0).ready(READY_STATE, Role::Joiner, ELITE), (READY_STATE, None));
+        let ticks = |mode| {
+            let mut gate = Gate::new(DEFAULT_HOLD);
+            gate.ready(READY_STATE, Role::Joiner, mode);
+            let mut count = 1;
+            while gate.tick(false, true).0 != Tick::Release {
+                count += 1;
+            }
+            count
+        };
+        assert_eq!(ticks(ELITE), ticks(QUICKPLAY));
     }
 
     #[test]

@@ -38,7 +38,8 @@ leaves, and the load back to the character select starts.*
   later than usual (3 by default). Meanwhile the opponent sees you as
   "Preparing…" and Pause has Leave Battle. Then the match starts as usual.
 - **Names:** the opponent's name shows instead of "???".
-- **Quickplay only:** local wireless, other online modes and offline play are
+- **Quickplay only:** it acts in online Quickplay, Elite Smash included
+  (since 0.3.1). Local wireless, other online modes and offline play are
   left alone.
 
 How it does this, and what it changes in the game:
@@ -62,6 +63,9 @@ consoles, one with the plugin.
   on 2026-11-10 (its release `manifest.json`). 0.3.0 has been on that card
   since 2026-11-10 23:55Z, with `hold_seconds=5`; as of 2026-11-13 no play
   of the hold is recorded. v0.3.0 has been a full release since 2026-11-13.
+- **Elite Smash** (0.3.1) was tested on the operator's Switch on 2026-11-23:
+  opponents' names and icons show instead of "???". The Eden pairs ran plain
+  Quickplay only.
 
 ## Install
 
@@ -69,6 +73,8 @@ Tested on: Super Smash Bros. Ultimate 13.0.5 · Switch firmware 23.5.0 · Atmosp
 
 Copy `libquickplay_cancel_fix.nro` to
 `sd:/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/`, from
+[v0.3.1](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.3.1)
+(Elite Smash rooms too),
 [v0.3.0](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.3.0)
 (the joiner's hold) or
 [v0.2.1](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.2.1)
