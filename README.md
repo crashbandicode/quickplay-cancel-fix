@@ -122,7 +122,9 @@ hold_seconds=5
 - **The install line** ends `other_hook=member_test`. That's the plugin's own
   name hook overlapping a code check, not another plugin.
 - Tested in Eden over LAN. The hold itself hasn't been played on a Switch yet.
-- **Elite Smash** (0.3.1) is host-tested only: the Eden pairs ran plain Quickplay, and it hasn't been played on a Switch yet.
+- **Elite Smash** (0.3.1) was tested on the operator's Switch on 2026-11-23:
+  opponents' names and icons show instead of "???". The Eden pairs ran plain
+  Quickplay only.
 
 ## Build
 
