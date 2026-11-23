@@ -59,13 +59,15 @@ consoles, one with the plugin.
 - **Hosting from the character select** (0.2.1): Leave Battle while the
   opponent loaded, Yes back to the character select, and the rematch match
   after it played to its end.
-- **On a Switch:** 0.2.1 was installed and played on the operator's console
-  on 2026-11-10 (its release `manifest.json`). 0.3.0 has been on that card
-  since 2026-11-10 23:55Z, with `hold_seconds=5`; as of 2026-11-13 no play
-  of the hold is recorded. v0.3.0 has been a full release since 2026-11-13.
-- **Elite Smash** (0.3.1) was tested on the operator's Switch on 2026-11-23:
-  opponents' names and icons show instead of "???". The Eden pairs ran plain
-  Quickplay only.
+- **On a Switch:** the operator tested 0.3.1 on their console on 2026-11-23:
+  Elite Smash names and icons (they show instead of "???"), the count raise
+  (Leave Battle as the host), and the leave hold (as the joiner). No log or
+  capture of that play is kept.
+  - 0.2.1 was installed and played on the same console on 2026-11-10 (its
+    release `manifest.json`). 0.3.0 was on that card from 2026-11-10 23:55Z
+    until 0.3.1 replaced it, with `hold_seconds=5`. v0.3.0 has been a full
+    release since 2026-11-13.
+- **Elite Smash in Eden:** not run. The Eden pairs ran plain Quickplay only.
 
 ## Install
 

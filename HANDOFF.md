@@ -2,18 +2,21 @@
 
 ## 0.3.1 — 2026-11-23
 
-- **`main`** is the merge of `elite-mode`; tag `v0.3.1` is on it. Playbook followed: `ssbu-mod-playbook` `b49b4e1`.
+- **`main`** is the merge of `elite-mode` (`1be120d`, tag `v0.3.1`) plus one docs commit that records the console
+  test in full. Playbook followed: `ssbu-mod-playbook` `b49b4e1`.
 - **0.3.1 = 0.3.0 + Elite Smash rooms:** one test, `model::quickplay_room`, replaces the six checks of the mode word:
   `0x07010101` (plain Quickplay) or `0x07010400` (Elite Smash). No hook site, guard or game call changed.
 - **Build:** release NRO `a73eb183b114d3cc…` (53,248 B). Gates on a build host: `cargo test` (44), clippy,
   `--no-default-features`, the release and diag builds. No cargo runs on the Surface.
-- **Card:** 0.3.1 replaced 0.3.0 on 2026-11-23 at 21:57Z. The operator played Elite Smash with it: names and icons
-  show.
+- **Card:** 0.3.1 replaced 0.3.0 on 2026-11-23 at 21:57Z. The operator tested 0.3.1 on their Switch that day: Elite
+  Smash names and icons, the count raise, and the leave hold.
+- **Release:** v0.3.1's notes and `manifest.json` first said the count raise and the hold were not confirmed on a
+  console. Both were corrected on 2026-11-23 (`manifest.json` and `SHA256SUMS.txt` replaced; the NRO and the tag are
+  unchanged).
 - **Evidence:** [docs/EVIDENCE.md](docs/EVIDENCE.md), section 0.3.1.
 - **Open:**
   - no Eden run of an Elite Smash room exists: both profiles would need a rating at or above the game's threshold;
-  - on 0.3.0, Leave Battle was reported as already offered in Elite Smash rooms; that is not explained;
-  - no Switch play of the hold is recorded.
+  - on 0.3.0, Leave Battle was reported as already offered in Elite Smash rooms; that is not explained.
 - The sections below are the earlier handoffs, unchanged.
 
 ## Doc check — 2026-11-13

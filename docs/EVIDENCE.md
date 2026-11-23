@@ -13,11 +13,14 @@ and logs stay with each run under its label (`/home/intpa/eden-runs/<label>/out`
     release and diag builds.
   - The three new mode tests fail against 0.3.0's checks (41 passed, 3 failed, each on `0x07010400`) and pass with the
     change.
-- **On a Switch:** installed on the operator's card on 2026-11-23 at 21:57Z, replacing 0.3.0. The operator played
-  Elite Smash with it that day: opponents' names and icons show instead of "???". No log or capture of that play is
-  kept.
-- **Not run:** no Eden run of an Elite Smash room; the LAN pairs run plain Quickplay. The count raise and the hold in
-  Elite Smash are covered by the host tests only. Play with no desync is shown for plain Quickplay (0.3.0, below).
+- **On a Switch:** installed on the operator's card on 2026-11-23 at 21:57Z, replacing 0.3.0. The operator tested
+  0.3.1 on their Switch that day: Elite Smash names and icons (they show instead of "???"), the count raise, and the
+  leave hold. No log or capture of that play is kept.
+  - Corrected on 2026-11-23, after the tag: this section first said the count raise and the hold in Elite Smash were
+    covered by the host tests only. The operator's test covered them. The docs at tag `v0.3.1` still carry the first
+    wording.
+- **Not run in Eden:** no Eden run of an Elite Smash room; the LAN pairs run plain Quickplay. Eden's two-console
+  results, with the detector on both, are for plain Quickplay (0.3.0, below).
 
 ## 0.3.0: the joiner's ready hold (2026-11-10)
 
@@ -26,6 +29,8 @@ and logs stay with each run under its label (`/home/intpa/eden-runs/<label>/out`
 - **Card** (2026-11-13 note): installed 2026-11-10 23:55:56Z with `config.ini` `hold_seconds=5`
   (`smash-training-lobby/artifacts/card-install-qcf-0.3.0/`), still there at the 2026-11-12 22:26Z readback. No
   Switch play of the hold is recorded yet; v0.3.0 is still a Forgejo pre-release.
+  - 2026-11-23 note: the hold was tested on the Switch with 0.3.1 (above). v0.3.0 became a full release on
+    2026-11-13.
   - Gates: `cargo test` 41, `cargo clippy --all-targets -- -D warnings`, `--no-default-features`, the release and diag
     builds.
 - **Setup:** Eden on the XPS, two instances of 13.0.5 playing Quickplay against each other over LAN Online (TLS on, a
