@@ -12,7 +12,7 @@ the game's own.
 
 **Before** (joining a room, no plugin):
 
-![Before: joining a room without the plugin, "Get Ready" at once, Pause opens nothing, and the match starts](docs/media/before.gif)
+<video src="https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/media/blob/afdedeaf3c93d92101baf87bf3a566322c267ed5" aria-label="Before: joining a room without the plugin, &quot;Get Ready&quot; at once, Pause opens nothing, and the match starts" autoplay muted loop playsinline controls></video> [Open the clip](docs/media/before.mp4)
 
 *Eden, 2026-11-11, run `qcf-shv1`, no plugin on either console. The console
 has joined another console's room from the character select. Both players
@@ -22,7 +22,7 @@ no way out.*
 
 **After** (joining a room, the 3 s hold):
 
-![After: joining a room, during the hold Pause has Leave Battle, Yes, and back to the character select](docs/media/after.gif)
+<video src="https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/media/blob/2eecf5fafd4d6eb9a2435f9725c7aa724b8e0ec1" aria-label="After: joining a room, during the hold Pause has Leave Battle, Yes, and back to the character select" autoplay muted loop playsinline controls></video> [Open the clip](docs/media/after.mp4)
 
 *Eden, 2026-11-10, run `qcf-xhd4` row `h3l`, 0.3.0 release build
 (`d69f11cf…`) with the default hold. The same join and the same presses.

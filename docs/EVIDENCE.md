@@ -91,10 +91,10 @@ and logs stay with each run under its label (`/home/intpa/eden-runs/<label>/out`
 
 - Both clips are the joining console's screen (a), 1280×720: the runner's raw takes, trimmed with
   `tools/gif_trim.py` (frame durations kept).
-- `after.gif`: `qcf-xhd4` row `h3l` (0.3.0, the 3 s hold), 0.3–7.0 s of the take, 6.7 s.
+- `after.mp4`: `qcf-xhd4` row `h3l` (0.3.0, the 3 s hold), 0.3–7.0 s of the take, 6.7 s.
   - Frames: the waiting area fading in; Pause with Leave Battle; Leave Battle focused (a "Preparing…", the opponent
     "Joined!"); "Would you like to leave the game?" on No, then Yes; then the load back.
-- `before.gif`: `qcf-shv1` row `vb` (2026-11-11, **no plugin on either console**), 0.4–9.8 s, 9.4 s.
+- `before.mp4`: `qcf-shv1` row `vb` (2026-11-11, **no plugin on either console**), 0.4–9.8 s, 9.4 s.
   - The 0.3.0 release first carried a take of 0.3.0 with the hold off (`qcf-xhd4` row `h0`). That isn't the game
     without the plugin: 0.3.0 still offers a brief Leave Battle there. It was replaced (the operator's correction,
     2026-11-11).
