@@ -14,20 +14,13 @@ the game's own.
 
 <video src="https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/media/blob/afdedeaf3c93d92101baf87bf3a566322c267ed5" aria-label="Before: joining a room without the plugin, &quot;Get Ready&quot; at once, Pause opens nothing, and the match starts" autoplay muted loop playsinline controls></video> [Open the clip](docs/media/before.mp4)
 
-*Eden, 2026-11-11, run `qcf-shv1`, no plugin on either console. The console
-has joined another console's room from the character select. Both players
-are "Ready!" as soon as the waiting area appears, and "Get Ready" comes at
-once. Pause, pressed four times, opens nothing, and the match starts with
-no way out.*
+*Without the plugin, Get Ready closes the leave window.*
 
 **After** (joining a room, the 3 s hold):
 
 <video src="https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/media/blob/2eecf5fafd4d6eb9a2435f9725c7aa724b8e0ec1" aria-label="After: joining a room, during the hold Pause has Leave Battle, Yes, and back to the character select" autoplay muted loop playsinline controls></video> [Open the clip](docs/media/after.mp4)
 
-*Eden, 2026-11-10, run `qcf-xhd4` row `h3l`, 0.3.0 release build
-(`d69f11cf…`) with the default hold. The same join and the same presses.
-The console stays "Preparing…", so the room never reaches "Get Ready". Yes
-leaves, and the load back to the character select starts.*
+*With the hold, Pause opens Leave Battle.*
 
 ## What it does
 
@@ -45,43 +38,52 @@ leaves, and the load back to the character select starts.*
 How it does this, and what it changes in the game:
 [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
 
-## Tested
+## Current release
 
-[Evidence](docs/EVIDENCE.md): Eden, 2026-11-10, 13.0.5 over LAN Online, two
-consoles, one with the plugin.
+Quickplay Cancel Fix **v0.3.1** (2026-11-23) is a release for Elite Smash players who want to identify opponents and leave before a match starts.
 
-- **Joining, held 3, 6 and 10 s:** Pause showed Leave Battle and the
-  opponent's name 1.2–1.6 s after the waiting area appeared. Leaving went
-  back to the character select 4 of 4 times; with no leave the match started
-  after the hold, with no kick or time-out.
-- **Matches after a hold**, a rematch after a held match included, played
-  to their end on both consoles with no desync.
-- **Hosting from the character select** (0.2.1): Leave Battle while the
-  opponent loaded, Yes back to the character select, and the rematch match
-  after it played to its end.
-- **On a Switch:** the operator tested 0.3.1 on their console on 2026-11-23:
-  Elite Smash names and icons (they show instead of "???"), the count raise
-  (Leave Battle as the host), and the leave hold (as the joiner). No log or
-  capture of that play is kept.
-  - 0.2.1 was installed and played on the same console on 2026-11-10 (its
-    release `manifest.json`). 0.3.0 was on that card from 2026-11-10 23:55Z
-    until 0.3.1 replaced it, with `hold_seconds=5`. v0.3.0 has been a full
-    release since 2026-11-13.
-- **Elite Smash in Eden:** not run. The Eden pairs ran plain Quickplay only.
+### What you need
 
-## Install
+| Thing | Upstream | Our fork | What the fork changes |
+| --- | --- | --- | --- |
+| Switch firmware | [23.5.0](https://en-americas-support.nintendo.com/app/answers/detail/a_id/22525) | — | — |
+| Atmosphère | [1.12.2](https://github.com/Atmosphere-NX/Atmosphere/releases/latest) | [Atmosphère p1](https://git.syntaxbyexample.com/intpa/atmosphere-ro-cleanup-p1) | Cleans up after a failed module load. |
+| Super Smash Bros. Ultimate | 13.0.5 | — | — |
+| Skyline | [latest](https://github.com/skyline-dev/skyline/releases/latest) | [Skyline fork](https://git.syntaxbyexample.com/intpa/skyline) | Protects the logger queue from simultaneous access. |
 
-Tested on: Super Smash Bros. Ultimate 13.0.5 · Switch firmware 23.5.0 · Atmosphère 1.12.2
 
-Copy `libquickplay_cancel_fix.nro` to
-`sd:/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/`, from
-[v0.3.1](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.3.1)
-(Elite Smash rooms too),
-[v0.3.0](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.3.0)
-(the joiner's hold) or
-[v0.2.1](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.2.1)
-(the host side and the names, no hold). The install line goes to
-`sd:/ultimate/quickplay-cancel-fix/events.log`.
+### Install
+
+1. Download [libquickplay_cancel_fix.nro](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.3.1). Close Smash.
+2. Copy it to `sd:/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/libquickplay_cancel_fix.nro`. The two GIFs, `manifest.json` and `SHA256SUMS.txt` stay on your computer.
+3. For a five-second hold, set `hold_seconds=5` in `sd:/ultimate/quickplay-cancel-fix/config.ini`. Without the file, the hold lasts three seconds.
+
+**Update** — Replace the existing `libquickplay_cancel_fix.nro` in that folder. Keep your optional `config.ini`.
+
+**Uninstall** — Delete `sd:/atmosphere/contents/01006A800016E000/romfs/skyline/plugins/libquickplay_cancel_fix.nro`.
+
+### What changed
+
+| Change | Guide |
+| --- | --- |
+| Show Elite Smash opponents’ names and icons in the waiting area. | [Quickplay guide](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/src/tag/v0.3.1/docs/HOW-IT-WORKS.md) |
+| Use Leave Battle while hosting in Elite Smash. | [Quickplay guide](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/src/tag/v0.3.1/docs/HOW-IT-WORKS.md) |
+| Get a few seconds to leave after joining an Elite Smash room. | [Quickplay guide](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/src/tag/v0.3.1/docs/HOW-IT-WORKS.md) |
+
+### Tested on
+
+| Feature | Hardware | Eden |
+| --- | --- | --- |
+| Show Elite Smash opponents’ names and icons in the waiting area. | Yes | No |
+| Use Leave Battle while hosting in Elite Smash. | Yes | No |
+| Get a few seconds to leave after joining an Elite Smash room. | Yes | No |
+
+### Known limits
+
+- Eden testing covered plain Quickplay. The hold keeps counting down while the menu is open. Set `hold_seconds=5` for more time.
+- You can leave from the waiting area only. Inputs during the black loading screen are discarded. [Details](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/src/tag/v0.3.1/README.md).
+
+Previous releases: [v0.3.0](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.3.0) · [v0.2.1](https://git.syntaxbyexample.com/intpa/quickplay-cancel-fix/releases/tag/v0.2.1).
 
 ## Settings
 
